@@ -1,0 +1,67 @@
+{
+  "name": "switch-ai",
+  "version": "0.1.0",
+  "description": "Intelligent model router that automatically selects the best AI model for your task, optimizing cost and performance",
+  "main": "dist/index.js",
+  "bin": {
+    "switch-ai": "dist/cli/index.js"
+  },
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx watch src/cli/index.ts",
+    "start": "node dist/cli/index.js start",
+    "test": "vitest",
+    "test:coverage": "vitest --coverage",
+    "type-check": "tsc --noEmit",
+    "lint": "eslint src --ext .ts",
+    "lint:fix": "eslint src --ext .ts --fix",
+    "clean": "rm -rf dist"
+  },
+  "keywords": [
+    "ai",
+    "llm",
+    "model-routing",
+    "cost-optimization",
+    "claude",
+    "anthropic",
+    "openrouter",
+    "litellm",
+    "proxy"
+  ],
+  "author": "",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yourusername/switch-ai"
+  },
+  "bugs": {
+    "url": "https://github.com/yourusername/switch-ai/issues"
+  },
+  "homepage": "https://github.com/yourusername/switch-ai#readme",
+  "dependencies": {
+    "better-sqlite3": "^9.2.2",
+    "commander": "^11.1.0",
+    "axios": "^1.6.8",
+    "zod": "^3.22.4",
+    "chalk": "^5.3.0",
+    "ora": "^8.0.1",
+    "dotenv": "^16.3.1",
+    "node-fetch": "^3.3.2"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.6",
+    "@types/better-sqlite3": "^7.6.8",
+    "typescript": "^5.3.3",
+    "tsx": "^4.7.0",
+    "eslint": "^8.56.0",
+    "@typescript-eslint/eslint-plugin": "^6.17.0",
+    "@typescript-eslint/parser": "^6.17.0",
+    "vitest": "^1.1.0",
+    "@vitest/coverage-v8": "^1.1.0",
+    "prettier": "^3.1.1"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
