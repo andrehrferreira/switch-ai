@@ -23,6 +23,7 @@ export async function cmdClaude(claudeArgs: string[]): Promise<void> {
   loadKeysIntoEnv();
 
   // Redirect server logs to file so they don't pollute Claude Code's UI
+  logger.setLevel('debug');
   logger.setLogFile(LOG_FILE);
 
   if (!isServerRunning()) {

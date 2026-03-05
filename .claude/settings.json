@@ -1,5 +1,35 @@
 {
   "env": {
     "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
+  },
+  "permissions": {
+    "allow": [
+      "Bash(npx tsc --noEmit)",
+      "Bash(./node_modules/.bin/tsc --noEmit)",
+      "Bash(pnpm test)",
+      "Bash(./node_modules/.bin/vitest run src/core/__tests__/router.test.ts src/core/__tests__/orchestrator.test.ts src/core/__tests__/selection-algorithm.test.ts)",
+      "Bash(pnpm approve-builds)",
+      "Bash(pnpm approve-builds better-sqlite3 esbuild)",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); d.setdefault\\(''pnpm'',{}\\)[''onlyBuiltDependencies'']=[''better-sqlite3'',''esbuild'']; json.dump\\(d,sys.stdout,indent=2\\)\")",
+      "Bash(mv /tmp/pkg.json package.json)",
+      "Bash(pnpm install)",
+      "Bash(pnpm install --ignore-scripts)",
+      "Bash(./node_modules/.bin/vitest run --exclude 'src/memory/**')",
+      "Bash(node -e \"const p=require\\(''./package.json''\\); p.pnpm={onlyBuiltDependencies:[''better-sqlite3'',''esbuild'']}; require\\(''fs''\\).writeFileSync\\(''package.json'',JSON.stringify\\(p,null,2\\)+''\\\\n''\\)\")",
+      "Bash(pnpm build)",
+      "Bash(pnpm add -D esbuild)",
+      "Bash(npm install)",
+      "Bash(npm run build)",
+      "Bash(npm test)",
+      "Read(//Users/caikpigosso/.switch-ai/**)",
+      "Bash(./node_modules/.bin/vitest run src/core/__tests__/)",
+      "Bash(./node_modules/.bin/vitest run src/core/__tests__/backends/cli-backend.test.ts)",
+      "Bash(gemini -p)",
+      "Bash(python3 -c \"import sys,json; [print\\(json.dumps\\(json.loads\\(l\\),indent=0\\)[:200]\\) for l in sys.stdin if l.strip\\(\\)]\")",
+      "Bash(git add src/core/backend-preference.ts src/core/backends/cli-backend.ts src/core/router.ts src/core/orchestrator.ts src/server/dashboard-api.ts src/server/dashboard-html.ts src/server/handler.ts src/server/index.ts src/utils/logger.ts src/core/__tests__/backends/cli-backend.test.ts src/core/__tests__/router.test.ts src/cli/commands/claude.ts src/cli/commands/start.ts .rulebook/tasks/add-dashboard/tasks.md package.json .claude/settings.json)"
+    ],
+    "additionalDirectories": [
+      "/Users/caikpigosso/Documents/Desenvolvimento/caik/switch-ai/node_modules/.pnpm"
+    ]
   }
 }

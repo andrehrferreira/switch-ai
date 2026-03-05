@@ -8,7 +8,7 @@ vi.mock('../backends/cli-backend');
 
 import { selectModel } from '../selection-algorithm';
 import { callOpenRouterBackend } from '../backends/openrouter-backend';
-import { detectCliTool, callClaudeCli, callGeminiCli } from '../backends/cli-backend';
+import { detectCliTool, callClaudeCli, callGeminiCli, callCursorCli } from '../backends/cli-backend';
 import { routeRequest } from '../router';
 
 function makeModel(overrides: Partial<Model> = {}): Model {
@@ -125,8 +125,9 @@ describe('routeRequest', () => {
     });
     vi.mocked(detectCliTool).mockResolvedValue(true);
     vi.mocked(callClaudeCli).mockRejectedValue(new Error('CLI failed'));
-    // Also make gemini fail so routing falls through to OpenRouter
+    // Also make gemini and cursor fail so routing falls through to OpenRouter
     vi.mocked(callGeminiCli).mockRejectedValue(new Error('CLI failed'));
+    vi.mocked(callCursorCli).mockRejectedValue(new Error('CLI failed'));
     vi.mocked(callOpenRouterBackend).mockResolvedValue(makeResponse('OpenRouter fallback'));
 
     const result = await routeRequest(baseReq);
@@ -160,7 +161,9 @@ describe('routeRequest', () => {
       reasoning: 'google',
     });
     vi.mocked(detectCliTool).mockResolvedValue(true);
+    vi.mocked(callClaudeCli).mockRejectedValue(new Error('CLI failed'));
     vi.mocked(callGeminiCli).mockRejectedValue(new Error('Gemini CLI failed'));
+    vi.mocked(callCursorCli).mockRejectedValue(new Error('CLI failed'));
     vi.mocked(callOpenRouterBackend).mockResolvedValue(makeResponse('OpenRouter fallback'));
 
     const result = await routeRequest(baseReq);

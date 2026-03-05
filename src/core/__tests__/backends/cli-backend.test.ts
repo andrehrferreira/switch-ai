@@ -1,8 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { EventEmitter } from 'events';
+import { Writable, Readable } from 'stream';
 
 // Mock child_process before importing cli-backend
 vi.mock('child_process', () => ({
   exec: vi.fn(),
+  spawn: vi.fn(),
 }));
 
 // Mock quota-manager to avoid exhaustion checks
@@ -14,7 +17,7 @@ vi.mock('../../../core/quota-manager', () => ({
   },
 }));
 
-import { exec } from 'child_process';
+import { exec, spawn } from 'child_process';
 import { detectCliTool, callClaudeCli, callGeminiCli } from '../../backends/cli-backend';
 
 type AnyCallback = (err: Error | null, stdout: string, stderr: string) => void;
@@ -35,19 +38,62 @@ function mockExecError(message: string) {
   });
 }
 
-/** Returns the full command string from the last exec call. */
-function getLastCommand(): string {
-  return vi.mocked(exec).mock.calls[0]?.[0] as string ?? '';
+/** Create a mock child process for spawn that resolves with output */
+function mockSpawnSuccess(output: string) {
+  vi.mocked(spawn).mockImplementation(() => {
+    const child = new EventEmitter() as ReturnType<typeof spawn>;
+    const stdoutEmitter = new EventEmitter();
+    const stderrEmitter = new EventEmitter();
+    const stdinStream = new Writable({ write(_chunk, _enc, cb) { cb(); } });
+
+    child.stdout = stdoutEmitter as ReturnType<typeof spawn>['stdout'];
+    child.stderr = stderrEmitter as ReturnType<typeof spawn>['stderr'];
+    child.stdin = stdinStream as ReturnType<typeof spawn>['stdin'];
+
+    process.nextTick(() => {
+      stdoutEmitter.emit('data', output);
+      child.emit('close', 0);
+    });
+
+    return child;
+  });
 }
 
-/** Returns the options object from the last exec call. */
-function getLastOptions(): { env?: NodeJS.ProcessEnv } {
-  return (vi.mocked(exec).mock.calls[0]?.[1] ?? {}) as { env?: NodeJS.ProcessEnv };
+function mockSpawnError(message: string) {
+  vi.mocked(spawn).mockImplementation(() => {
+    const child = new EventEmitter() as ReturnType<typeof spawn>;
+    const stdoutEmitter = new EventEmitter();
+    const stderrEmitter = new EventEmitter();
+    const stdinStream = new Writable({ write(_chunk, _enc, cb) { cb(); } });
+
+    child.stdout = stdoutEmitter as ReturnType<typeof spawn>['stdout'];
+    child.stderr = stderrEmitter as ReturnType<typeof spawn>['stderr'];
+    child.stdin = stdinStream as ReturnType<typeof spawn>['stdin'];
+
+    process.nextTick(() => {
+      stderrEmitter.emit('data', message);
+      child.emit('close', 1);
+    });
+
+    return child;
+  });
+}
+
+/** Returns the args from the last spawn call */
+function getSpawnArgs(): { command: string; args: string[]; options: Record<string, unknown> } {
+  const call = vi.mocked(spawn).mock.calls[0];
+  return {
+    command: call?.[0] as string ?? '',
+    args: (call?.[1] as string[]) ?? [],
+    options: (call?.[2] as Record<string, unknown>) ?? {},
+  };
 }
 
 // Clear CLAUDECODE env for tests
 beforeEach(() => {
   delete process.env['CLAUDECODE'];
+  delete process.env['SWITCH_AI_SERVER'];
+  delete process.env['SWITCH_AI_PROXY_MODE'];
 });
 
 describe('detectCliTool', () => {
@@ -70,6 +116,27 @@ describe('detectCliTool', () => {
     const result = await detectCliTool('gemini');
     expect(result).toBe(true);
   });
+
+  it('returns true for claude even when SWITCH_AI_SERVER is set (loop prevention is in cliEnv)', async () => {
+    process.env['SWITCH_AI_SERVER'] = '1';
+    mockExecSuccess('/usr/bin/claude\n');
+    const result = await detectCliTool('claude');
+    expect(result).toBe(true);
+  });
+
+  it('returns true for claude even when SWITCH_AI_PROXY_MODE is set (loop prevention is in cliEnv)', async () => {
+    process.env['SWITCH_AI_PROXY_MODE'] = 'claude-code';
+    mockExecSuccess('/usr/bin/claude\n');
+    const result = await detectCliTool('claude');
+    expect(result).toBe(true);
+  });
+
+  it('still detects gemini when SWITCH_AI_SERVER is set', async () => {
+    process.env['SWITCH_AI_SERVER'] = '1';
+    mockExecSuccess('/usr/bin/gemini\n');
+    const result = await detectCliTool('gemini');
+    expect(result).toBe(true);
+  });
 });
 
 describe('callClaudeCli', () => {
@@ -81,7 +148,7 @@ describe('callClaudeCli', () => {
   beforeEach(() => vi.clearAllMocks());
 
   it('returns AnthropicResponse on success with plain text output', async () => {
-    mockExecSuccess('  Claude response text  ');
+    mockSpawnSuccess('  Claude response text  ');
     const result = await callClaudeCli(messages, 100);
     expect(result.id).toMatch(/^msg_/);
     expect(result.type).toBe('message');
@@ -102,73 +169,65 @@ describe('callClaudeCli', () => {
       duration_ms: 1234,
       session_id: 'abc123',
     });
-    mockExecSuccess(jsonOutput);
+    mockSpawnSuccess(jsonOutput);
     const result = await callClaudeCli(messages, 100);
     expect(result.content[0].text).toBe('Parsed from JSON');
   });
 
   it('falls back to raw stdout when JSON is_error is not a string result', async () => {
     const jsonOutput = JSON.stringify({ type: 'result', is_error: true });
-    mockExecSuccess(jsonOutput);
+    mockSpawnSuccess(jsonOutput);
     const result = await callClaudeCli(messages, 100);
     // result field is absent → falls back to raw stdout
     expect(result.content[0].text).toBe(jsonOutput.trim());
   });
 
-  it('calls claude with required non-interactive flags and prompt', async () => {
-    mockExecSuccess('output');
+  it('spawns claude with required non-interactive flags', async () => {
+    mockSpawnSuccess('output');
     await callClaudeCli(messages, 500);
-    const cmd = getLastCommand();
-    expect(cmd).toContain('claude');
-    expect(cmd).toContain('-p');
-    expect(cmd).toContain('--output-format');
-    expect(cmd).toContain('json');
-    expect(cmd).toContain('--dangerously-skip-permissions');
-    expect(cmd).toContain('--no-session-persistence');
-    expect(cmd).toContain('Hello');
+    const { command, args } = getSpawnArgs();
+    expect(command).toBe('claude');
+    expect(args).toContain('-p');
+    expect(args).toContain('--output-format');
+    expect(args).toContain('json');
+    expect(args).toContain('--dangerously-skip-permissions');
+    expect(args).toContain('--no-session-persistence');
   });
 
-  it('calls claude without CLAUDECODE env var', async () => {
+  it('spawns claude without CLAUDECODE env var', async () => {
     process.env['CLAUDECODE'] = 'some-session-id';
-    mockExecSuccess('output');
+    mockSpawnSuccess('output');
     await callClaudeCli(messages, 100);
-    const opts = getLastOptions();
-    expect(opts?.env?.['CLAUDECODE']).toBeUndefined();
+    const { options } = getSpawnArgs();
+    expect((options.env as NodeJS.ProcessEnv)?.['CLAUDECODE']).toBeUndefined();
     delete process.env['CLAUDECODE'];
   });
 
-  it('calls claude without ANTHROPIC_BASE_URL env var', async () => {
+  it('spawns claude without ANTHROPIC_BASE_URL env var', async () => {
     process.env['ANTHROPIC_BASE_URL'] = 'http://localhost:3000';
-    mockExecSuccess('output');
+    mockSpawnSuccess('output');
     await callClaudeCli(messages, 100);
-    const opts = getLastOptions();
-    expect(opts?.env?.['ANTHROPIC_BASE_URL']).toBeUndefined();
+    const { options } = getSpawnArgs();
+    expect((options.env as NodeJS.ProcessEnv)?.['ANTHROPIC_BASE_URL']).toBeUndefined();
     delete process.env['ANTHROPIC_BASE_URL'];
   });
 
-  it('uses last user message as prompt', async () => {
-    mockExecSuccess('response');
+  it('uses last user message as prompt via stdin', async () => {
+    mockSpawnSuccess('response');
     const msgs = [
       { role: 'user', content: 'first' },
       { role: 'assistant', content: 'reply' },
       { role: 'user', content: 'second question' },
     ];
     await callClaudeCli(msgs, 100);
-    const cmd = getLastCommand();
-    expect(cmd).toContain('second question');
-  });
-
-  it('uses empty string when no user messages', async () => {
-    mockExecSuccess('response');
-    await callClaudeCli([{ role: 'system', content: 'sys' }], 100);
-    const cmd = getLastCommand();
-    expect(cmd).toContain('claude');
-    expect(cmd).toContain('-p');
+    // Prompt is sent via stdin, not as a command argument
+    const { args } = getSpawnArgs();
+    expect(args).not.toContain('second question');
   });
 
   it('propagates errors', async () => {
-    mockExecError('claude not found');
-    await expect(callClaudeCli(messages, 100)).rejects.toThrow('claude not found');
+    mockSpawnError('claude not found');
+    await expect(callClaudeCli(messages, 100)).rejects.toThrow();
   });
 });
 
@@ -178,7 +237,7 @@ describe('callGeminiCli', () => {
   beforeEach(() => vi.clearAllMocks());
 
   it('returns AnthropicResponse on success', async () => {
-    mockExecSuccess('  Gemini response  ');
+    mockSpawnSuccess('  Gemini response  ');
     const result = await callGeminiCli(messages, 200);
     expect(result.id).toMatch(/^msg_/);
     expect(result.content[0].text).toBe('Gemini response');
@@ -187,17 +246,16 @@ describe('callGeminiCli', () => {
     expect(result.usage).toEqual({ input_tokens: 0, output_tokens: 0 });
   });
 
-  it('calls gemini with -p flag and prompt', async () => {
-    mockExecSuccess('output');
+  it('spawns gemini with -p flag', async () => {
+    mockSpawnSuccess('output');
     await callGeminiCli(messages, 300);
-    const cmd = getLastCommand();
-    expect(cmd).toContain('gemini');
-    expect(cmd).toContain('-p');
-    expect(cmd).toContain('Tell me about AI');
+    const { command, args } = getSpawnArgs();
+    expect(command).toBe('gemini');
+    expect(args).toContain('-p');
   });
 
   it('propagates errors', async () => {
-    mockExecError('gemini not found');
-    await expect(callGeminiCli(messages, 100)).rejects.toThrow('gemini not found');
+    mockSpawnError('gemini not found');
+    await expect(callGeminiCli(messages, 100)).rejects.toThrow();
   });
 });

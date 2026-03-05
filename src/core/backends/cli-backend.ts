@@ -1,10 +1,10 @@
-import { exec as nodeExec } from 'child_process';
+import { exec as nodeExec, spawn } from 'child_process';
 import { randomUUID } from 'crypto';
 import type { AnthropicResponse, ContentBlock } from '../../server/types';
 import { quotaManager } from '../quota-manager';
 import logger from '../../utils/logger';
 
-export type CliTool = 'claude' | 'gemini';
+export type CliTool = 'claude' | 'gemini' | 'cursor-agent';
 export type CliMessage = { role: string; content: string | ContentBlock[] };
 
 // Gemini CLI can take 20-40s for a response — use a generous timeout
@@ -42,10 +42,7 @@ function shellQuote(s: string): string {
 
 /**
  * Run a CLI command and capture output via exec (shell mode).
- *
- * Uses a shell on all platforms so npm global .cmd wrappers are found in PATH.
- * Arguments are manually quoted so prompts with spaces/special chars work correctly —
- * execFile({ shell: true }) joins args without quoting and breaks on Windows.
+ * Used for short commands (e.g. `which`). For long prompts, use spawnWithStdin.
  */
 function execAsync(file: string, args: string[], env?: NodeJS.ProcessEnv): Promise<{ stdout: string; stderr: string }> {
   const cmd = [file, ...args.map(shellQuote)].join(' ');
@@ -64,6 +61,48 @@ function execAsync(file: string, args: string[], env?: NodeJS.ProcessEnv): Promi
   });
 }
 
+/**
+ * Spawn a CLI command, pipe the prompt via stdin, and capture output.
+ * Avoids OS argument length limits for large prompts.
+ */
+function spawnWithStdin(
+  file: string,
+  args: string[],
+  stdinData: string,
+  env?: NodeJS.ProcessEnv
+): Promise<{ stdout: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    // Do NOT use shell: true — it strips empty string arguments (e.g. `-p ""`)
+    // which breaks Gemini CLI. spawn already searches PATH without shell.
+    const child = spawn(file, args, {
+      env,
+      stdio: ['pipe', 'pipe', 'pipe'],
+      timeout: CLI_TIMEOUT_MS,
+    });
+
+    let stdout = '';
+    let stderr = '';
+
+    child.stdout.on('data', (chunk) => { stdout += chunk; });
+    child.stderr.on('data', (chunk) => { stderr += chunk; });
+
+    child.on('error', (err) => {
+      reject(new CliError(err.message, stderr, null));
+    });
+
+    child.on('close', (code) => {
+      if (code !== 0) {
+        reject(new CliError(`Process exited with code ${code}`, stderr, code));
+      } else {
+        resolve({ stdout, stderr });
+      }
+    });
+
+    child.stdin.write(stdinData);
+    child.stdin.end();
+  });
+}
+
 function cliEnv(): NodeJS.ProcessEnv {
   const env = { ...process.env };
   // Prevent nested Claude Code sessions
@@ -71,6 +110,9 @@ function cliEnv(): NodeJS.ProcessEnv {
   // Prevent recursive proxy loops: unset ANTHROPIC_BASE_URL so CLI tools
   // connect directly to the real API, not back to our proxy
   delete env['ANTHROPIC_BASE_URL'];
+  // Clean up switch-ai internal env vars
+  delete env['SWITCH_AI_SERVER'];
+  delete env['SWITCH_AI_PROXY_MODE'];
   return env;
 }
 
@@ -93,11 +135,8 @@ export async function detectCliTool(tool: CliTool): Promise<boolean> {
     return false;
   }
 
-  // claude -p does not work when launched from within a Claude Code session:
-  // with CLAUDECODE set it refuses ("nested sessions"), without it it hangs.
-  if (tool === 'claude' && process.env['CLAUDECODE']) {
-    return false;
-  }
+  // Loop prevention is handled by cliEnv() which removes ANTHROPIC_BASE_URL
+  // and CLAUDECODE, so spawned CLI processes talk directly to their APIs.
 
   const command = process.platform === 'win32' ? 'where' : /* v8 ignore next */ 'which';
   try {
@@ -116,13 +155,15 @@ export async function callClaudeCli(
   const modelId = 'claude-cli';
 
   try {
-    // -p: non-interactive print mode (process exits after response)
+    // -p: non-interactive print mode, reads prompt from stdin
     // --output-format json: single JSON result object, no streaming hang
     // --dangerously-skip-permissions: skip tool approval prompts (like cursor-agent --force)
     // --no-session-persistence: don't write session files for proxy use
-    const { stdout } = await execAsync(
+    // Prompt is piped via stdin to avoid OS argument length limits
+    const { stdout } = await spawnWithStdin(
       'claude',
-      ['-p', '--output-format', 'json', '--dangerously-skip-permissions', '--no-session-persistence', prompt],
+      ['-p', '--output-format', 'json', '--dangerously-skip-permissions', '--no-session-persistence'],
+      prompt,
       cliEnv()
     );
     quotaManager.markAvailable(modelId);
@@ -166,7 +207,9 @@ export async function callGeminiCli(
   const modelId = 'gemini-cli';
 
   try {
-    const { stdout } = await execAsync('gemini', ['-p', prompt]);
+    // Pipe prompt via stdin to avoid OS argument length limits.
+    // Gemini CLI requires -p with a value; pass empty string so it reads from stdin.
+    const { stdout } = await spawnWithStdin('gemini', ['-p', ''], prompt);
     quotaManager.markAvailable(modelId);
 
     return {
@@ -183,6 +226,52 @@ export async function callGeminiCli(
     if (err instanceof CliError && err.isQuotaExceeded()) {
       quotaManager.markExhausted(modelId);
       logger.warn(`Gemini CLI quota exceeded. Stderr: ${err.stderr}`);
+    }
+    throw err;
+  }
+}
+
+export async function callCursorCli(
+  messages: CliMessage[],
+  _maxTokens: number
+): Promise<AnthropicResponse> {
+  const prompt = buildPrompt(messages);
+  const modelId = 'cursor-cli';
+
+  try {
+    // cursor-agent: non-interactive mode, reads prompt from stdin
+    const { stdout } = await spawnWithStdin(
+      'cursor-agent',
+      ['-p'],
+      prompt,
+      cliEnv()
+    );
+    quotaManager.markAvailable(modelId);
+
+    let text = stdout.trim();
+    try {
+      const parsed = JSON.parse(text) as { result?: string };
+      if (typeof parsed.result === 'string') {
+        text = parsed.result;
+      }
+    } catch {
+      // Not JSON — use raw stdout as-is
+    }
+
+    return {
+      id: `msg_${randomUUID()}`,
+      type: 'message',
+      role: 'assistant',
+      content: [{ type: 'text', text }],
+      model: modelId,
+      stop_reason: 'end_turn',
+      stop_sequence: null,
+      usage: { input_tokens: 0, output_tokens: 0 },
+    };
+  } catch (err) {
+    if (err instanceof CliError && err.isQuotaExceeded()) {
+      quotaManager.markExhausted(modelId);
+      logger.warn(`Cursor CLI quota exceeded. Stderr: ${err.stderr}`);
     }
     throw err;
   }

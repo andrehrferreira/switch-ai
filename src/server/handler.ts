@@ -32,6 +32,8 @@ export async function handleRequest(ctx: RequestContext): Promise<AnthropicRespo
   return {
     ...result.response,
     id: result.response.id || `msg_${randomUUID()}`,
+    // Echo back the model the client requested so Claude Code recognises the response
+    model: request.model || result.response.model,
     timestamp: new Date().toISOString(),
   };
 }

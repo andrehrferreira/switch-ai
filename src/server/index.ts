@@ -3,7 +3,8 @@ import logger from '../utils/logger';
 import { handleRequest } from './handler';
 import { ValidationError } from '../utils/errors';
 import { getDashboardHtml } from './dashboard-html';
-import { apiStats, apiRequests, apiModels, apiBlacklist, apiCategories, apiActivity, apiBackends } from './dashboard-api';
+import { apiStats, apiRequests, apiRequestsExport, apiModels, apiBlacklist, apiCategories, apiActivity, apiBackends } from './dashboard-api';
+import { getForcedBackend, setForcedBackend, type ForcedBackend } from '../core/backend-preference';
 import type { RequestContext } from './types';
 
 let server: http.Server | null = null;
@@ -36,17 +37,95 @@ export async function startServer(port: number, host: string = 'localhost'): Pro
               return;
             }
 
+            // Debug toggle API
+            if (path === '/api/debug') {
+              if (method === 'GET') {
+                res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+                res.end(JSON.stringify({ level: logger.getLevel() }));
+                return;
+              }
+              if (method === 'POST') {
+                const current = logger.getLevel();
+                const newLevel = current === 'debug' ? 'info' : 'debug';
+                logger.setLevel(newLevel);
+                logger.info(`Log level changed to ${newLevel}`);
+                res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+                res.end(JSON.stringify({ level: newLevel }));
+                return;
+              }
+            }
+
+            // Backend preference API
+            if (path === '/api/backend') {
+              const validBackends: ForcedBackend[] = ['auto', 'claude-cli', 'gemini-cli', 'cursor-cli', 'gemini-api', 'openrouter'];
+              if (method === 'GET') {
+                res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+                res.end(JSON.stringify({ backend: getForcedBackend(), options: validBackends }));
+                return;
+              }
+              if (method === 'POST') {
+                const requested = (parsedBody as { backend?: string }).backend;
+                if (requested && validBackends.includes(requested as ForcedBackend)) {
+                  setForcedBackend(requested as ForcedBackend);
+                  logger.info(`Backend forced to: ${requested}`);
+                  res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+                  res.end(JSON.stringify({ backend: requested }));
+                } else {
+                  res.writeHead(400, { 'Content-Type': 'application/json' });
+                  res.end(JSON.stringify({ error: `Invalid backend. Options: ${validBackends.join(', ')}` }));
+                }
+                return;
+              }
+            }
+
             // Dashboard API endpoints
             if (method === 'GET' && path.startsWith('/api/')) {
+              const qs = new URLSearchParams(rawUrl.split('?')[1] ?? '');
               let data: unknown;
-              if (path === '/api/stats')      data = apiStats();
-              else if (path === '/api/requests') data = apiRequests(Number(new URLSearchParams(rawUrl.split('?')[1] ?? '').get('limit') ?? 20));
-              else if (path === '/api/models')   data = apiModels();
-              else if (path === '/api/blacklist')data = apiBlacklist();
-              else if (path === '/api/categories')data = apiCategories();
-              else if (path === '/api/activity') data = apiActivity();
-              else if (path === '/api/backends') data = await apiBackends();
-              else { res.writeHead(404); res.end('{}'); return; }
+
+              if (path === '/api/stats') {
+                data = apiStats();
+              } else if (path === '/api/requests') {
+                data = apiRequests({
+                  limit: Number(qs.get('limit') ?? 20),
+                  offset: Number(qs.get('offset') ?? 0),
+                  model: qs.get('model') ?? undefined,
+                  status: qs.get('status') ?? undefined,
+                  from: qs.get('from') ?? undefined,
+                  to: qs.get('to') ?? undefined,
+                  search: qs.get('search') ?? undefined,
+                });
+              } else if (path === '/api/requests/export') {
+                const format = (qs.get('format') ?? 'json') as 'json' | 'csv';
+                const content = apiRequestsExport({
+                  model: qs.get('model') ?? undefined,
+                  status: qs.get('status') ?? undefined,
+                  from: qs.get('from') ?? undefined,
+                  to: qs.get('to') ?? undefined,
+                }, format);
+                const contentType = format === 'csv' ? 'text/csv' : 'application/json';
+                const ext = format === 'csv' ? 'csv' : 'json';
+                res.writeHead(200, {
+                  'Content-Type': contentType,
+                  'Content-Disposition': `attachment; filename="requests.${ext}"`,
+                  'Access-Control-Allow-Origin': '*',
+                });
+                res.end(content);
+                return;
+              } else if (path === '/api/models') {
+                data = apiModels();
+              } else if (path === '/api/blacklist') {
+                data = apiBlacklist();
+              } else if (path === '/api/categories') {
+                data = apiCategories();
+              } else if (path === '/api/activity') {
+                data = apiActivity();
+              } else if (path === '/api/backends') {
+                data = await apiBackends();
+              } else {
+                res.writeHead(404); res.end('{}'); return;
+              }
+
               res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
               res.end(JSON.stringify(data));
               return;
@@ -77,6 +156,14 @@ export async function startServer(port: number, host: string = 'localhost'): Pro
 
             // Handle request
             const response = await handleRequest(ctx);
+            logger.debug('Response ready', {
+              model: response.model,
+              contentBlocks: response.content.length,
+              stopReason: response.stop_reason,
+              stream: parsedBody.stream === true,
+              firstBlockType: response.content[0]?.type,
+              firstBlockLength: response.content[0]?.type === 'text' ? (response.content[0] as { text: string }).text.length : 0,
+            });
 
             // Streaming requested — emit as SSE then close
             if (parsedBody.stream === true) {
@@ -111,6 +198,7 @@ export async function startServer(port: number, host: string = 'localhost'): Pro
               sendEvent('message_delta', { type: 'message_delta', delta: { stop_reason: response.stop_reason ?? 'end_turn', stop_sequence: null }, usage: { output_tokens: response.usage.output_tokens } });
               sendEvent('message_stop', { type: 'message_stop' });
               res.end();
+              logger.debug('SSE stream completed');
               return;
             }
 
@@ -123,9 +211,11 @@ export async function startServer(port: number, host: string = 'localhost'): Pro
           } catch (error) {
             const isValidation = error instanceof ValidationError;
             const statusCode = isValidation ? 400 : 500;
+            const errorMessage = error instanceof Error ? error.message : /* v8 ignore next */ String(error);
             if (!isValidation) {
               logger.error('Error handling request', {
-                error: error instanceof Error ? error.message : /* v8 ignore next */ String(error),
+                error: errorMessage,
+                stack: error instanceof Error ? error.stack : undefined,
               });
             }
             res.writeHead(statusCode, { 'Content-Type': 'application/json' });
@@ -135,7 +225,7 @@ export async function startServer(port: number, host: string = 'localhost'): Pro
                   type: isValidation ? 'invalid_request_error' : 'internal_server_error',
                   message: isValidation
                     ? (error as ValidationError).message
-                    : 'Internal server error',
+                    : `Internal server error: ${errorMessage}`,
                 },
               })
             );

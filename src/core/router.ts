@@ -1,7 +1,8 @@
 import { selectModel } from './selection-algorithm';
 import { callOpenRouterBackend } from './backends/openrouter-backend';
-import { detectCliTool, callClaudeCli, callGeminiCli } from './backends/cli-backend';
+import { detectCliTool, callClaudeCli, callGeminiCli, callCursorCli } from './backends/cli-backend';
 import { hasGeminiCredentials, callGeminiApiBackend } from './backends/gemini-api-backend';
+import { getForcedBackend } from './backend-preference';
 import type { AnthropicResponse, ContentBlock } from '../server/types';
 import logger from '../utils/logger';
 
@@ -29,7 +30,7 @@ export function extractText(content: MessageContent): string {
 export interface RouterResult {
   response: AnthropicResponse;
   selectedModel: string;
-  backend: 'openrouter' | 'claude-cli' | 'gemini-cli' | 'gemini-api';
+  backend: 'openrouter' | 'claude-cli' | 'gemini-cli' | 'cursor-cli' | 'gemini-api';
   attempts: number;
 }
 
@@ -41,18 +42,71 @@ export async function routeRequest(req: RouterRequest): Promise<RouterResult> {
   });
 
   let attempts = 0;
+  const forced = getForcedBackend();
 
-  // CLIs only work for plain-text requests — skip them when the request uses tools
-  // (tool_use/tool_result blocks have no text for CLIs to read, and CLIs can't produce tool_use blocks)
-  const hasTools = (req.tools?.length ?? 0) > 0;
   const hasToolResult = req.messages.some(
     (m) => Array.isArray(m.content) && (m.content as Array<{ type: string }>).some((b) => b.type === 'tool_result')
   );
-  const cliEligible = !hasTools && !hasToolResult;
+  const lastAssistant = [...req.messages].reverse().find((m) => m.role === 'assistant');
+  const lastAssistantUsedTool = lastAssistant
+    && Array.isArray(lastAssistant.content)
+    && (lastAssistant.content as Array<{ type: string }>).some((b) => b.type === 'tool_use');
+  const cliEligible = !hasToolResult && !lastAssistantUsedTool;
 
+  logger.debug('Routing decision', {
+    forced,
+    cliEligible,
+    hasToolResult,
+    lastAssistantUsedTool: !!lastAssistantUsedTool,
+    hasTools: (req.tools?.length ?? 0) > 0,
+    messageCount: req.messages.length,
+    promptLength: prompt.length,
+    preferredModel: req.preferredModel,
+    hasGeminiKey: hasGeminiCredentials(),
+    hasOpenRouterKey: !!process.env['OPENROUTER_KEY'],
+    selectedModel: selection.model.id,
+    fallbackChain: selection.fallbackChain.map((m) => m.id),
+  });
+
+  // ── Forced backend mode ──
+  if (forced !== 'auto') {
+    attempts++;
+    logger.info(`Forced backend: ${forced}`);
+    if (forced === 'claude-cli') {
+      const response = await callClaudeCli(req.messages, req.maxTokens);
+      return { response, selectedModel: 'claude-cli', backend: 'claude-cli', attempts };
+    }
+    if (forced === 'gemini-cli') {
+      const response = await callGeminiCli(req.messages, req.maxTokens);
+      return { response, selectedModel: 'gemini-cli', backend: 'gemini-cli', attempts };
+    }
+    if (forced === 'cursor-cli') {
+      const response = await callCursorCli(req.messages, req.maxTokens);
+      return { response, selectedModel: 'cursor-cli', backend: 'cursor-cli', attempts };
+    }
+    if (forced === 'gemini-api') {
+      const response = await callGeminiApiBackend({
+        messages: req.messages, maxTokens: req.maxTokens,
+        system: req.system, tools: req.tools, toolChoice: req.toolChoice,
+      });
+      return { response, selectedModel: 'gemini-api', backend: 'gemini-api', attempts };
+    }
+    if (forced === 'openrouter') {
+      const model = selection.model;
+      const response = await callOpenRouterBackend({
+        modelId: model.id, messages: req.messages, maxTokens: req.maxTokens,
+        system: req.system, tools: req.tools, toolChoice: req.toolChoice,
+      });
+      return { response, selectedModel: model.id, backend: 'openrouter', attempts };
+    }
+  }
+
+  // ── Auto mode: try free CLIs first, then paid ──
   if (cliEligible) {
     // Priority 1: Claude CLI (free subscription, no cost)
-    if (await detectCliTool('claude')) {
+    const claudeAvailable = await detectCliTool('claude');
+    logger.debug('Claude CLI detection', { available: claudeAvailable });
+    if (claudeAvailable) {
       attempts++;
       try {
         const response = await callClaudeCli(req.messages, req.maxTokens);
@@ -60,12 +114,15 @@ export async function routeRequest(req: RouterRequest): Promise<RouterResult> {
         return { response, selectedModel: 'claude-cli', backend: 'claude-cli', attempts };
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        logger.warn(`Claude CLI failed: ${msg}`);
+        const stderr = (err as { stderr?: string }).stderr ?? '';
+        logger.warn(`Claude CLI failed: ${msg}`, { stderr: stderr.slice(0, 500) });
       }
     }
 
     // Priority 2: Gemini CLI (free subscription, no cost)
-    if (await detectCliTool('gemini')) {
+    const geminiAvailable = await detectCliTool('gemini');
+    logger.debug('Gemini CLI detection', { available: geminiAvailable });
+    if (geminiAvailable) {
       attempts++;
       try {
         const response = await callGeminiCli(req.messages, req.maxTokens);
@@ -73,12 +130,31 @@ export async function routeRequest(req: RouterRequest): Promise<RouterResult> {
         return { response, selectedModel: 'gemini-cli', backend: 'gemini-cli', attempts };
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        logger.warn(`Gemini CLI failed: ${msg}`);
+        const stderr = (err as { stderr?: string }).stderr ?? '';
+        logger.warn(`Gemini CLI failed: ${msg}`, { stderr: stderr.slice(0, 500) });
       }
     }
+
+    // Priority 3: Cursor CLI (free subscription, no cost)
+    const cursorAvailable = await detectCliTool('cursor-agent');
+    logger.debug('Cursor CLI detection', { available: cursorAvailable });
+    if (cursorAvailable) {
+      attempts++;
+      try {
+        const response = await callCursorCli(req.messages, req.maxTokens);
+        logger.info('Routed via cursor-cli');
+        return { response, selectedModel: 'cursor-cli', backend: 'cursor-cli', attempts };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        const stderr = (err as { stderr?: string }).stderr ?? '';
+        logger.warn(`Cursor CLI failed: ${msg}`, { stderr: stderr.slice(0, 500) });
+      }
+    }
+  } else {
+    logger.debug('CLIs skipped (mid-tool-flow)');
   }
 
-  // Priority 3: Gemini API (GEMINI_API_KEY) — handles tool calls
+  // Priority 4: Gemini API (GEMINI_API_KEY) — handles tool calls
   if (hasGeminiCredentials()) {
     attempts++;
     try {
@@ -97,7 +173,7 @@ export async function routeRequest(req: RouterRequest): Promise<RouterResult> {
     }
   }
 
-  // Priority 4: OpenRouter (paid) — try selected model + fallback chain
+  // Priority 5: OpenRouter (paid) — try selected model + fallback chain
   const modelsToTry = [selection.model, ...selection.fallbackChain];
   for (const model of modelsToTry) {
     attempts++;

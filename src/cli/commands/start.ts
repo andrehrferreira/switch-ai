@@ -9,6 +9,7 @@ import configManager from '../../config';
 import { readDiskCache, fetchOpenRouterModels } from '../../registry/openrouter';
 import { modelRegistry } from '../../registry/model-registry';
 import { loadKeysIntoEnv } from './keys';
+import logger from '../../utils/logger';
 
 const PID_FILE = path.join(os.homedir(), '.switch-ai', 'server.pid');
 
@@ -24,6 +25,7 @@ function removePid(): void {
 }
 
 export async function cmdStart(options: { port?: number; host?: string } = {}): Promise<void> {
+  logger.setLevel('debug');
   loadKeysIntoEnv();
   const config = configManager.load();
   const port = options.port ?? config.server.port;
@@ -51,7 +53,7 @@ export async function cmdStart(options: { port?: number; host?: string } = {}): 
     await startServer(port, host);
     writePid();
     spinner.succeed(chalk.green(`Switch AI proxy running at http://${host}:${port}/v1/messages`));
-    console.log(chalk.dim(`  Set: export ANTHROPIC_BASE_URL=http://${host}:${port}/v1`));
+    console.log(chalk.dim(`  Set: export ANTHROPIC_BASE_URL=http://${host}:${port}`));
     console.log(chalk.dim('  Press Ctrl+C to stop'));
 
     const shutdown = async () => {

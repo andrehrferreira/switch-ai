@@ -29,6 +29,10 @@ class Logger {
     this.level = level;
   }
 
+  getLevel(): LogLevel {
+    return this.level;
+  }
+
   /** Redirect all log output to a file instead of stdout/stderr. */
   setLogFile(filePath: string): void {
     fs.mkdirSync(path.dirname(filePath), { recursive: true });
