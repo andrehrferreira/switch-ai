@@ -53,12 +53,13 @@ export async function routeRequest(req: RouterRequest): Promise<RouterResult> {
     && (lastAssistant.content as Array<{ type: string }>).some((b) => b.type === 'tool_use');
   const cliEligible = !hasToolResult && !lastAssistantUsedTool;
 
-  logger.debug('Routing decision', {
+  logger.info('[ROUTER] Incoming request', {
     forced,
     cliEligible,
     hasToolResult,
     lastAssistantUsedTool: !!lastAssistantUsedTool,
     hasTools: (req.tools?.length ?? 0) > 0,
+    toolCount: req.tools?.length ?? 0,
     messageCount: req.messages.length,
     promptLength: prompt.length,
     preferredModel: req.preferredModel,
@@ -71,87 +72,108 @@ export async function routeRequest(req: RouterRequest): Promise<RouterResult> {
   // ── Forced backend mode ──
   if (forced !== 'auto') {
     attempts++;
-    logger.info(`Forced backend: ${forced}`);
-    if (forced === 'claude-cli') {
-      const response = await callClaudeCli(req.messages, req.maxTokens);
-      return { response, selectedModel: 'claude-cli', backend: 'claude-cli', attempts };
-    }
-    if (forced === 'gemini-cli') {
-      const response = await callGeminiCli(req.messages, req.maxTokens);
-      return { response, selectedModel: 'gemini-cli', backend: 'gemini-cli', attempts };
-    }
-    if (forced === 'cursor-cli') {
-      const response = await callCursorCli(req.messages, req.maxTokens);
-      return { response, selectedModel: 'cursor-cli', backend: 'cursor-cli', attempts };
-    }
-    if (forced === 'gemini-api') {
-      const response = await callGeminiApiBackend({
-        messages: req.messages, maxTokens: req.maxTokens,
-        system: req.system, tools: req.tools, toolChoice: req.toolChoice,
+    logger.info(`[ROUTER] >>> FORCED backend: ${forced}`);
+    try {
+      if (forced === 'claude-cli') {
+        logger.info('[ROUTER] Calling claude-cli (forced)');
+        const response = await callClaudeCli(req.messages, req.maxTokens);
+        logger.info('[ROUTER] <<< SUCCESS via claude-cli (forced)');
+        return { response, selectedModel: 'claude-cli', backend: 'claude-cli', attempts };
+      }
+      if (forced === 'gemini-cli') {
+        logger.info('[ROUTER] Calling gemini-cli (forced)');
+        const response = await callGeminiCli(req.messages, req.maxTokens);
+        logger.info('[ROUTER] <<< SUCCESS via gemini-cli (forced)');
+        return { response, selectedModel: 'gemini-cli', backend: 'gemini-cli', attempts };
+      }
+      if (forced === 'cursor-cli') {
+        logger.info('[ROUTER] Calling cursor-cli (forced)');
+        const response = await callCursorCli(req.messages, req.maxTokens);
+        logger.info('[ROUTER] <<< SUCCESS via cursor-cli (forced)');
+        return { response, selectedModel: 'cursor-cli', backend: 'cursor-cli', attempts };
+      }
+      if (forced === 'gemini-api') {
+        logger.info('[ROUTER] Calling gemini-api (forced)');
+        const response = await callGeminiApiBackend({
+          messages: req.messages, maxTokens: req.maxTokens,
+          system: req.system, tools: req.tools, toolChoice: req.toolChoice,
+        });
+        logger.info('[ROUTER] <<< SUCCESS via gemini-api (forced)');
+        return { response, selectedModel: 'gemini-api', backend: 'gemini-api', attempts };
+      }
+      if (forced === 'openrouter') {
+        const model = selection.model;
+        logger.info(`[ROUTER] Calling openrouter/${model.id} (forced)`);
+        const response = await callOpenRouterBackend({
+          modelId: model.id, messages: req.messages, maxTokens: req.maxTokens,
+          system: req.system, tools: req.tools, toolChoice: req.toolChoice,
+        });
+        logger.info(`[ROUTER] <<< SUCCESS via openrouter/${model.id} (forced)`);
+        return { response, selectedModel: model.id, backend: 'openrouter', attempts };
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      const stderr = (err as { stderr?: string }).stderr ?? '';
+      logger.error(`[ROUTER] !!! FORCED backend ${forced} FAILED, falling through to auto`, {
+        error: msg,
+        stderr: stderr.slice(0, 500),
       });
-      return { response, selectedModel: 'gemini-api', backend: 'gemini-api', attempts };
-    }
-    if (forced === 'openrouter') {
-      const model = selection.model;
-      const response = await callOpenRouterBackend({
-        modelId: model.id, messages: req.messages, maxTokens: req.maxTokens,
-        system: req.system, tools: req.tools, toolChoice: req.toolChoice,
-      });
-      return { response, selectedModel: model.id, backend: 'openrouter', attempts };
+      // Fall through to auto mode instead of crashing with 500
     }
   }
 
   // ── Auto mode: try free CLIs first, then paid ──
+  logger.info('[ROUTER] Entering auto mode', { cliEligible });
   if (cliEligible) {
     // Priority 1: Claude CLI (free subscription, no cost)
     const claudeAvailable = await detectCliTool('claude');
-    logger.debug('Claude CLI detection', { available: claudeAvailable });
+    logger.info(`[ROUTER] claude-cli available: ${claudeAvailable}`);
     if (claudeAvailable) {
       attempts++;
       try {
         const response = await callClaudeCli(req.messages, req.maxTokens);
-        logger.info('Routed via claude-cli');
+        logger.info('[ROUTER] <<< SUCCESS via claude-cli (auto)');
         return { response, selectedModel: 'claude-cli', backend: 'claude-cli', attempts };
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         const stderr = (err as { stderr?: string }).stderr ?? '';
-        logger.warn(`Claude CLI failed: ${msg}`, { stderr: stderr.slice(0, 500) });
+        logger.warn(`[ROUTER] claude-cli FAILED: ${msg}`, { stderr: stderr.slice(0, 500) });
       }
     }
 
     // Priority 2: Gemini CLI (free subscription, no cost)
     const geminiAvailable = await detectCliTool('gemini');
-    logger.debug('Gemini CLI detection', { available: geminiAvailable });
+    logger.info(`[ROUTER] gemini-cli available: ${geminiAvailable}`);
     if (geminiAvailable) {
       attempts++;
       try {
         const response = await callGeminiCli(req.messages, req.maxTokens);
-        logger.info('Routed via gemini-cli');
+        logger.info('[ROUTER] <<< SUCCESS via gemini-cli (auto)');
         return { response, selectedModel: 'gemini-cli', backend: 'gemini-cli', attempts };
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         const stderr = (err as { stderr?: string }).stderr ?? '';
-        logger.warn(`Gemini CLI failed: ${msg}`, { stderr: stderr.slice(0, 500) });
+        logger.warn(`[ROUTER] gemini-cli FAILED: ${msg}`, { stderr: stderr.slice(0, 500) });
       }
     }
 
     // Priority 3: Cursor CLI (free subscription, no cost)
     const cursorAvailable = await detectCliTool('cursor-agent');
-    logger.debug('Cursor CLI detection', { available: cursorAvailable });
+    logger.info(`[ROUTER] cursor-cli available: ${cursorAvailable}`);
     if (cursorAvailable) {
       attempts++;
       try {
         const response = await callCursorCli(req.messages, req.maxTokens);
-        logger.info('Routed via cursor-cli');
+        logger.info('[ROUTER] <<< SUCCESS via cursor-cli (auto)');
         return { response, selectedModel: 'cursor-cli', backend: 'cursor-cli', attempts };
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         const stderr = (err as { stderr?: string }).stderr ?? '';
-        logger.warn(`Cursor CLI failed: ${msg}`, { stderr: stderr.slice(0, 500) });
+        logger.warn(`[ROUTER] cursor-cli FAILED: ${msg}`, { stderr: stderr.slice(0, 500) });
       }
     }
   } else {
-    logger.debug('CLIs skipped (mid-tool-flow)');
+    logger.info('[ROUTER] CLIs skipped (mid-tool-flow: hasToolResult=' + hasToolResult + ', lastAssistantUsedTool=' + !!lastAssistantUsedTool + ')');
   }
 
   // Priority 4: Gemini API (GEMINI_API_KEY) — handles tool calls

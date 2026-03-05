@@ -79,14 +79,21 @@ function mockSpawnError(message: string) {
   });
 }
 
-/** Returns the args from the last spawn call */
+/** Returns the args from the last spawn call.
+ * On Windows, command+args are merged into a single string (shell mode),
+ * so we parse them back for assertion convenience. */
 function getSpawnArgs(): { command: string; args: string[]; options: Record<string, unknown> } {
   const call = vi.mocked(spawn).mock.calls[0];
-  return {
-    command: call?.[0] as string ?? '',
-    args: (call?.[1] as string[]) ?? [],
-    options: (call?.[2] as Record<string, unknown>) ?? {},
-  };
+  const rawCommand = call?.[0] as string ?? '';
+  const rawArgs = (call?.[1] as string[]) ?? [];
+  const options = (call?.[2] as Record<string, unknown>) ?? {};
+
+  // On Windows the code joins file+args into a single command string
+  if (process.platform === 'win32' && rawArgs.length === 0 && rawCommand.includes(' ')) {
+    const parts = rawCommand.split(/\s+/);
+    return { command: parts[0], args: parts.slice(1), options };
+  }
+  return { command: rawCommand, args: rawArgs, options };
 }
 
 // Clear CLAUDECODE env for tests

@@ -33,6 +33,8 @@ class CliError extends Error {
 /** Quote a shell argument. Uses CMD.EXE double-quote syntax on Windows, POSIX single-quotes elsewhere. */
 function shellQuote(s: string): string {
   if (process.platform === 'win32') {
+    // Empty string must be explicitly quoted as "" so it's preserved as an argument
+    if (s === '') return '""';
     if (!/[\s"&|<>^%!()\[\]{}]/.test(s)) return s;
     return '"' + s.replace(/"/g, '""') + '"';
   }
@@ -72,12 +74,29 @@ function spawnWithStdin(
   env?: NodeJS.ProcessEnv
 ): Promise<{ stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
-    // Do NOT use shell: true — it strips empty string arguments (e.g. `-p ""`)
-    // which breaks Gemini CLI. spawn already searches PATH without shell.
-    const child = spawn(file, args, {
+    // On Windows, CLI tools installed via npm are .cmd files which require
+    // shell: true for spawn to find and execute them. On POSIX, shell is not
+    // needed and spawn searches PATH natively.
+    const isWin = process.platform === 'win32';
+
+    logger.debug('spawnWithStdin', {
+      file,
+      args,
+      shell: isWin,
+      platform: process.platform,
+      stdinLength: stdinData.length,
+    });
+
+    // On Windows with shell mode, build a single command string to avoid
+    // Node DEP0190 warning about passing args with shell: true.
+    const spawnFile = isWin ? [file, ...args.map(shellQuote)].join(' ') : file;
+    const spawnArgs = isWin ? [] : args;
+
+    const child = spawn(spawnFile, spawnArgs, {
       env,
       stdio: ['pipe', 'pipe', 'pipe'],
       timeout: CLI_TIMEOUT_MS,
+      shell: isWin,
     });
 
     let stdout = '';
@@ -87,10 +106,12 @@ function spawnWithStdin(
     child.stderr.on('data', (chunk) => { stderr += chunk; });
 
     child.on('error', (err) => {
+      logger.debug('spawn error', { file, error: err.message });
       reject(new CliError(err.message, stderr, null));
     });
 
     child.on('close', (code) => {
+      logger.debug('spawn close', { file, code, stdoutLength: stdout.length, stderrLength: stderr.length });
       if (code !== 0) {
         reject(new CliError(`Process exited with code ${code}`, stderr, code));
       } else {
@@ -132,6 +153,7 @@ function buildPrompt(messages: CliMessage[]): string {
 export async function detectCliTool(tool: CliTool): Promise<boolean> {
   const modelId = `${tool}-cli`;
   if (quotaManager.isExhausted(modelId)) {
+    logger.debug(`detectCliTool: ${tool} skipped (quota exhausted)`);
     return false;
   }
 
@@ -140,9 +162,13 @@ export async function detectCliTool(tool: CliTool): Promise<boolean> {
 
   const command = process.platform === 'win32' ? 'where' : /* v8 ignore next */ 'which';
   try {
-    await execAsync(command, [tool]);
+    const { stdout } = await execAsync(command, [tool]);
+    logger.debug(`detectCliTool: ${tool} found`, { path: stdout.trim().split('\n')[0] });
     return true;
-  } catch {
+  } catch (err) {
+    logger.debug(`detectCliTool: ${tool} not found`, {
+      error: err instanceof Error ? err.message : String(err),
+    });
     return false;
   }
 }
@@ -160,9 +186,11 @@ export async function callClaudeCli(
     // --dangerously-skip-permissions: skip tool approval prompts (like cursor-agent --force)
     // --no-session-persistence: don't write session files for proxy use
     // Prompt is piped via stdin to avoid OS argument length limits
+    const args = ['-p', '--output-format', 'json', '--dangerously-skip-permissions', '--no-session-persistence'];
+    logger.debug('callClaudeCli', { args, promptLength: prompt.length });
     const { stdout } = await spawnWithStdin(
       'claude',
-      ['-p', '--output-format', 'json', '--dangerously-skip-permissions', '--no-session-persistence'],
+      args,
       prompt,
       cliEnv()
     );
@@ -209,7 +237,9 @@ export async function callGeminiCli(
   try {
     // Pipe prompt via stdin to avoid OS argument length limits.
     // Gemini CLI requires -p with a value; pass empty string so it reads from stdin.
-    const { stdout } = await spawnWithStdin('gemini', ['-p', ''], prompt);
+    const args = ['-p', ''];
+    logger.debug('callGeminiCli', { args, promptLength: prompt.length });
+    const { stdout } = await spawnWithStdin('gemini', args, prompt);
     quotaManager.markAvailable(modelId);
 
     return {
@@ -240,9 +270,12 @@ export async function callCursorCli(
 
   try {
     // cursor-agent: non-interactive mode, reads prompt from stdin
+    // -f (--trust): skip interactive workspace trust prompt
+    const args = ['-p', '-f'];
+    logger.debug('callCursorCli', { args, promptLength: prompt.length });
     const { stdout } = await spawnWithStdin(
       'cursor-agent',
-      ['-p'],
+      args,
       prompt,
       cliEnv()
     );

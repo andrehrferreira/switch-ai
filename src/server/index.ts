@@ -66,8 +66,9 @@ export async function startServer(port: number, host: string = 'localhost'): Pro
               if (method === 'POST') {
                 const requested = (parsedBody as { backend?: string }).backend;
                 if (requested && validBackends.includes(requested as ForcedBackend)) {
+                  const prev = getForcedBackend();
                   setForcedBackend(requested as ForcedBackend);
-                  logger.info(`Backend forced to: ${requested}`);
+                  logger.info(`[BACKEND] Preference changed: ${prev} -> ${requested}`);
                   res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
                   res.end(JSON.stringify({ backend: requested }));
                 } else {

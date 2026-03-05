@@ -3,6 +3,7 @@ import type { RequestContext, AnthropicRequest, AnthropicResponse } from './type
 import { createMiddlewareStack, executeMiddlewareStack } from './middleware';
 import { orchestrate } from '../core/orchestrator';
 import { ValidationError } from '../utils/errors';
+import logger from '../utils/logger';
 
 export async function handleRequest(ctx: RequestContext): Promise<AnthropicResponse> {
   const middlewares = createMiddlewareStack();
@@ -20,6 +21,14 @@ export async function handleRequest(ctx: RequestContext): Promise<AnthropicRespo
 
   const request = ctx.parsedBody as AnthropicRequest;
 
+  logger.info('[HANDLER] Processing request', {
+    clientModel: request.model,
+    messageCount: request.messages.length,
+    hasSystem: !!request.system,
+    hasTools: !!(request.tools?.length),
+    toolCount: request.tools?.length ?? 0,
+  });
+
   const result = await orchestrate({
     messages: request.messages,
     maxTokens: request.max_tokens,
@@ -27,6 +36,14 @@ export async function handleRequest(ctx: RequestContext): Promise<AnthropicRespo
     system: request.system,
     tools: request.tools,
     toolChoice: request.tool_choice,
+  });
+
+  logger.info('[HANDLER] Response ready', {
+    backend: result.backend,
+    selectedModel: result.selectedModel,
+    attempts: result.attempts,
+    responseModel: result.response.model,
+    echoModel: request.model || result.response.model,
   });
 
   return {
