@@ -163,17 +163,19 @@ describe('server HTTP handling', () => {
       messages: [{ role: 'user', content: 'Hello' }],
       max_tokens: 100,
     });
-    expect([200, 500]).toContain(result.statusCode);
+    expect(result.statusCode).toBe(404);
   });
 
   it('handles empty body gracefully', async () => {
     const result = await makeRequest(port, '/v1/messages', 'POST');
-    expect([200, 500]).toContain(result.statusCode);
+    // Empty body should return 400 (validation error)
+    expect(result.statusCode).toBe(400);
   });
 
   it('handles GET request to /v1/messages', async () => {
     const result = await makeRequest(port, '/v1/messages', 'GET');
-    expect([200, 500]).toContain(result.statusCode);
+    // GET to POST-only endpoint should return 404 or 400
+    expect([400, 404]).toContain(result.statusCode);
   });
 
   it('handles request with invalid JSON body', async () => {

@@ -2,7 +2,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { AnthropicResponse } from '../../server/types';
 import type { RouterResult } from '../router';
 
-vi.mock('../router');
+vi.mock('../router', async (importOriginal) => {
+  const actual = await importOriginal() as typeof import('../router');
+  return { ...actual, routeRequest: vi.fn() };
+});
 vi.mock('../validator');
 vi.mock('../../memory/recorder');
 vi.mock('../../memory/learning');

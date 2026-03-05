@@ -36,7 +36,7 @@
 
 # Phase 6: Testing
 
-- [x] 6.1 Unit tests (100% coverage — 315 tests, 29 files)
+- [x] 6.1 Unit tests (315 tests, 11 failures due to recent code changes - needs fixes)
 - [ ] 6.2 Integration tests (full flow)
 - [ ] 6.3 E2E tests (real OpenRouter API)
 

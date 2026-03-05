@@ -1,8 +1,9 @@
 import http from 'http';
 import logger from '../utils/logger';
 import { handleRequest } from './handler';
+import { ValidationError } from '../utils/errors';
 import { getDashboardHtml } from './dashboard-html';
-import { apiStats, apiRequests, apiModels, apiBlacklist, apiCategories, apiActivity } from './dashboard-api';
+import { apiStats, apiRequests, apiModels, apiBlacklist, apiCategories, apiActivity, apiBackends } from './dashboard-api';
 import type { RequestContext } from './types';
 
 let server: http.Server | null = null;
@@ -44,6 +45,7 @@ export async function startServer(port: number, host: string = 'localhost'): Pro
               else if (path === '/api/blacklist')data = apiBlacklist();
               else if (path === '/api/categories')data = apiCategories();
               else if (path === '/api/activity') data = apiActivity();
+              else if (path === '/api/backends') data = await apiBackends();
               else { res.writeHead(404); res.end('{}'); return; }
               res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
               res.end(JSON.stringify(data));
@@ -119,15 +121,21 @@ export async function startServer(port: number, host: string = 'localhost'): Pro
             });
             res.end(JSON.stringify(response));
           } catch (error) {
-            logger.error('Error handling request', {
-              error: error instanceof Error ? error.message : /* v8 ignore next */ String(error),
-            });
-            res.writeHead(500, { 'Content-Type': 'application/json' });
+            const isValidation = error instanceof ValidationError;
+            const statusCode = isValidation ? 400 : 500;
+            if (!isValidation) {
+              logger.error('Error handling request', {
+                error: error instanceof Error ? error.message : /* v8 ignore next */ String(error),
+              });
+            }
+            res.writeHead(statusCode, { 'Content-Type': 'application/json' });
             res.end(
               JSON.stringify({
                 error: {
-                  type: 'internal_server_error',
-                  message: 'Internal server error',
+                  type: isValidation ? 'invalid_request_error' : 'internal_server_error',
+                  message: isValidation
+                    ? (error as ValidationError).message
+                    : 'Internal server error',
                 },
               })
             );

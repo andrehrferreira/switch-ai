@@ -33,9 +33,9 @@ describe('ModelRegistry', () => {
 
   describe('getModel', () => {
     it('returns model by id', () => {
-      const model = modelRegistry.getModel('claude-opus');
+      const model = modelRegistry.getModel('anthropic/claude-opus-4-5');
       expect(model).toBeDefined();
-      expect(model?.id).toBe('claude-opus');
+      expect(model?.id).toBe('anthropic/claude-opus-4-5');
     });
 
     it('returns undefined for unknown id', () => {
@@ -43,10 +43,10 @@ describe('ModelRegistry', () => {
       expect(model).toBeUndefined();
     });
 
-    it('returns disabled model too', () => {
-      const model = modelRegistry.getModel('claude-code');
+    it('returns model by enabled free-tier id', () => {
+      const model = modelRegistry.getModel('meta-llama/llama-3.3-70b-instruct:free');
       expect(model).toBeDefined();
-      expect(model?.enabled).toBe(false);
+      expect(model?.enabled).toBe(true);
     });
   });
 
@@ -126,7 +126,9 @@ describe('ModelRegistry', () => {
 
   describe('calculateCost', () => {
     it('calculates cost for a known model', () => {
-      const cost = modelRegistry.calculateCost('claude-opus', 1000, 1000);
+      // anthropic/claude-opus-4-5: input=$0.015/output=$0.075 per 1k
+      const cost = modelRegistry.calculateCost('anthropic/claude-opus-4-5', 1000, 1000);
+      // (1000 * 0.015) + (1000 * 0.075) = 0.09
       expect(cost).toBeCloseTo(0.09);
     });
 
@@ -136,7 +138,8 @@ describe('ModelRegistry', () => {
     });
 
     it('free models have 0 cost', () => {
-      const cost = modelRegistry.calculateCost('claude-code', 1000, 1000);
+      // meta-llama/llama-4-scout:free é free tier
+      const cost = modelRegistry.calculateCost('meta-llama/llama-4-scout:free', 1000, 1000);
       expect(cost).toBe(0);
     });
   });

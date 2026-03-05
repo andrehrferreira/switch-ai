@@ -7,6 +7,7 @@ import { startServer, isServerRunning } from '../../server';
 import configManager from '../../config';
 import logger from '../../utils/logger';
 import { databaseManager } from '../../memory';
+import { loadKeysIntoEnv } from './keys';
 
 const LOG_FILE = path.join(os.homedir(), '.switch-ai', 'server.log');
 
@@ -18,10 +19,16 @@ export async function cmdClaude(claudeArgs: string[]): Promise<void> {
 
   let startedServer = false;
 
+  // Load API keys from ~/.switch-ai/keys.env into process.env
+  loadKeysIntoEnv();
+
   // Redirect server logs to file so they don't pollute Claude Code's UI
   logger.setLogFile(LOG_FILE);
 
   if (!isServerRunning()) {
+    // Prevent nested claude CLI calls: the proxy must not spawn claude from within Claude Code
+    process.env['SWITCH_AI_PROXY_MODE'] = 'claude-code';
+
     const dbPath = path.join(os.homedir(), '.switch-ai', 'memory.db');
     databaseManager.connect(dbPath);
 

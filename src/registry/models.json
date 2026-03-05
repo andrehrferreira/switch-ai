@@ -1,53 +1,11 @@
 [
   {
-    "id": "claude-cli",
-    "name": "Claude CLI",
-    "tier": "free",
-    "provider": "anthropic",
-    "costPer1kTokens": { "input": 0, "output": 0 },
-    "contextWindow": 200000,
-    "categories": ["all"],
-    "enabled": true,
-    "requiresQuota": true
-  },
-  {
-    "id": "gemini-cli",
-    "name": "Gemini CLI",
-    "tier": "free",
-    "provider": "google",
-    "costPer1kTokens": { "input": 0, "output": 0 },
-    "contextWindow": 1000000,
-    "categories": ["all"],
-    "enabled": true,
-    "requiresQuota": true
-  },
-  {
-    "id": "claude-opus",
-    "name": "Claude Opus (Legacy ID)",
-    "tier": "premium",
-    "provider": "anthropic",
-    "costPer1kTokens": { "input": 0.015, "output": 0.075 },
-    "contextWindow": 200000,
-    "categories": ["all"],
-    "enabled": true
-  },
-  {
-    "id": "claude-code",
-    "name": "Claude Code (Legacy ID)",
-    "tier": "free",
-    "provider": "anthropic",
-    "costPer1kTokens": { "input": 0, "output": 0 },
-    "contextWindow": 200000,
-    "categories": ["all"],
-    "enabled": false
-  },
-  {
-    "id": "meta-llama/llama-4-scout:free",
-    "name": "Llama 4 Scout (Free)",
+    "id": "meta-llama/llama-3.3-70b-instruct:free",
+    "name": "Llama 3.3 70B (Free)",
     "tier": "free",
     "provider": "openrouter",
     "costPer1kTokens": { "input": 0, "output": 0 },
-    "contextWindow": 524288,
+    "contextWindow": 131072,
     "categories": ["all"],
     "enabled": true
   },
@@ -59,6 +17,46 @@
     "costPer1kTokens": { "input": 0, "output": 0 },
     "contextWindow": 131072,
     "categories": ["code", "research"],
+    "enabled": true
+  },
+  {
+    "id": "minimax/minimax-m2.5",
+    "name": "MiniMax M2.5",
+    "tier": "cheap",
+    "provider": "openrouter",
+    "costPer1kTokens": { "input": 0.0001, "output": 0.0001 },
+    "contextWindow": 1000000,
+    "categories": ["all"],
+    "enabled": true
+  },
+  {
+    "id": "google/gemini-2.5-flash-preview",
+    "name": "Gemini 2.5 Flash Preview",
+    "tier": "cheap",
+    "provider": "openrouter",
+    "costPer1kTokens": { "input": 0.0001, "output": 0.0003 },
+    "contextWindow": 1000000,
+    "categories": ["all"],
+    "enabled": true
+  },
+  {
+    "id": "x-ai/grok-3-mini-beta",
+    "name": "Grok 3 Mini Beta",
+    "tier": "cheap",
+    "provider": "openrouter",
+    "costPer1kTokens": { "input": 0.0003, "output": 0.0005 },
+    "contextWindow": 131072,
+    "categories": ["all"],
+    "enabled": true
+  },
+  {
+    "id": "qwen/qwen-2.5-72b-instruct",
+    "name": "Qwen 2.5 72B",
+    "tier": "cheap",
+    "provider": "openrouter",
+    "costPer1kTokens": { "input": 0.00013, "output": 0.0004 },
+    "contextWindow": 131072,
+    "categories": ["all"],
     "enabled": true
   },
   {

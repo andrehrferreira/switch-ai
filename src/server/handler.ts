@@ -2,6 +2,7 @@ import { randomUUID } from 'crypto';
 import type { RequestContext, AnthropicRequest, AnthropicResponse } from './types';
 import { createMiddlewareStack, executeMiddlewareStack } from './middleware';
 import { orchestrate } from '../core/orchestrator';
+import { ValidationError } from '../utils/errors';
 
 export async function handleRequest(ctx: RequestContext): Promise<AnthropicResponse> {
   const middlewares = createMiddlewareStack();
@@ -9,9 +10,12 @@ export async function handleRequest(ctx: RequestContext): Promise<AnthropicRespo
 
   // errorHandlerMiddleware may have swallowed an error into parsedBody
   if ((ctx.parsedBody as { error?: unknown }).error) {
-    throw new Error(
-      String((ctx.parsedBody as { error: { message?: string } }).error?.message ?? 'Request error')
-    );
+    const errData = (ctx.parsedBody as { error: { type?: string; message?: string } }).error;
+    const msg = String(errData.message ?? 'Request error');
+    if (errData.type === 'invalid_request_error') {
+      throw new ValidationError(msg);
+    }
+    throw new Error(msg);
   }
 
   const request = ctx.parsedBody as AnthropicRequest;

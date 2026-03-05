@@ -1,3 +1,4 @@
+import { execFile } from 'child_process';
 import databaseManager from '../memory/db';
 import { getCostSummary, getModelPerformance, getAllRequests } from '../memory/analytics';
 
@@ -68,6 +69,25 @@ export function apiCategories() {
     `)
     .all() as { category: string; count: number; successRate: number }[];
   return rows;
+}
+
+function cliExists(cmd: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const which = process.platform === 'win32' ? 'where' : 'which';
+    execFile(which, [cmd], (err) => resolve(!err));
+  });
+}
+
+export async function apiBackends() {
+  const [claude, gemini] = await Promise.all([cliExists('claude'), cliExists('gemini')]);
+  const hasOpenRouterKey = !!process.env['OPENROUTER_KEY'];
+  const hasGeminiApiKey = !!(process.env['GEMINI_API_KEY'] ?? process.env['GOOGLE_API_KEY']);
+  return [
+    { name: 'Claude CLI', id: 'claude-cli', type: 'cli', available: claude, description: 'Anthropic Claude Code (text)', free: true },
+    { name: 'Gemini CLI', id: 'gemini-cli', type: 'cli', available: gemini, description: 'Google Gemini CLI (text)', free: true },
+    { name: 'Gemini API', id: 'gemini-api', type: 'api', available: hasGeminiApiKey, description: 'Gemini API — tool calls (set GEMINI_API_KEY)', free: true },
+    { name: 'OpenRouter', id: 'openrouter', type: 'api', available: hasOpenRouterKey, description: 'OpenRouter API (paid)', free: false },
+  ];
 }
 
 export function apiActivity() {

@@ -111,7 +111,8 @@ describe('routeRequest', () => {
 
     const result = await routeRequest(baseReq);
     expect(result.backend).toBe('claude-cli');
-    expect(result.selectedModel).toBe('anthropic/claude-haiku');
+    // New router: selectedModel is 'claude-cli' (CLIs take priority regardless of provider)
+    expect(result.selectedModel).toBe('claude-cli');
     expect(callOpenRouterBackend).not.toHaveBeenCalled();
   });
 
@@ -124,6 +125,8 @@ describe('routeRequest', () => {
     });
     vi.mocked(detectCliTool).mockResolvedValue(true);
     vi.mocked(callClaudeCli).mockRejectedValue(new Error('CLI failed'));
+    // Also make gemini fail so routing falls through to OpenRouter
+    vi.mocked(callGeminiCli).mockRejectedValue(new Error('CLI failed'));
     vi.mocked(callOpenRouterBackend).mockResolvedValue(makeResponse('OpenRouter fallback'));
 
     const result = await routeRequest(baseReq);
@@ -144,7 +147,8 @@ describe('routeRequest', () => {
 
     const result = await routeRequest(baseReq);
     expect(result.backend).toBe('gemini-cli');
-    expect(result.selectedModel).toBe('google/gemini-flash');
+    // New router: selectedModel is 'gemini-cli' (CLIs take priority regardless of provider)
+    expect(result.selectedModel).toBe('gemini-cli');
     expect(callOpenRouterBackend).not.toHaveBeenCalled();
   });
 
@@ -199,21 +203,22 @@ describe('routeRequest', () => {
     await expect(routeRequest(baseReq)).rejects.toThrow('All routing backends exhausted');
   });
 
-  it('falls back to claude-cli when all model backends fail and CLI is available', async () => {
+  it('uses claude-cli first when available (no need for OpenRouter fallback)', async () => {
     vi.mocked(selectModel).mockReturnValue({
       model: makeModel({ id: 'openrouter/some-model', provider: 'openrouter' }),
       fallbackChain: [],
       confidence: 0.5,
       reasoning: 'test',
     });
-    vi.mocked(callOpenRouterBackend).mockRejectedValue(new Error('No key'));
     vi.mocked(detectCliTool).mockResolvedValue(true);
-    vi.mocked(callClaudeCli).mockResolvedValue(makeResponse('CLI fallback'));
+    vi.mocked(callClaudeCli).mockResolvedValue(makeResponse('CLI response'));
 
     const result = await routeRequest(baseReq);
     expect(result.backend).toBe('claude-cli');
     expect(result.selectedModel).toBe('claude-cli');
-    expect(result.attempts).toBe(2);
+    // CLIs have priority 1 — OpenRouter is never called
+    expect(result.attempts).toBe(1);
+    expect(callOpenRouterBackend).not.toHaveBeenCalled();
   });
 
   it('concatenates all message contents as prompt for selectModel', async () => {

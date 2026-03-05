@@ -22,6 +22,14 @@ const KNOWN_KEYS: Record<string, { description: string; validateUrl?: string }> 
   },
 };
 
+/** Load keys.env into process.env (call before starting the server) */
+export function loadKeysIntoEnv(): void {
+  const keys = readKeysFile();
+  for (const [k, v] of Object.entries(keys)) {
+    if (!process.env[k]) process.env[k] = v;
+  }
+}
+
 function readKeysFile(): Record<string, string> {
   if (!fs.existsSync(KEYS_FILE)) return {};
 

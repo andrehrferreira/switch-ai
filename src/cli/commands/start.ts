@@ -8,6 +8,7 @@ import { databaseManager } from '../../memory';
 import configManager from '../../config';
 import { readDiskCache, fetchOpenRouterModels } from '../../registry/openrouter';
 import { modelRegistry } from '../../registry/model-registry';
+import { loadKeysIntoEnv } from './keys';
 
 const PID_FILE = path.join(os.homedir(), '.switch-ai', 'server.pid');
 
@@ -23,6 +24,7 @@ function removePid(): void {
 }
 
 export async function cmdStart(options: { port?: number; host?: string } = {}): Promise<void> {
+  loadKeysIntoEnv();
   const config = configManager.load();
   const port = options.port ?? config.server.port;
   const host = options.host ?? config.server.host;
