@@ -8,18 +8,49 @@
 # Patterns added by @hivellm/rulebook
 # Added at: 2026-03-04T18:54:12.633Z
 
+# Build output
+dist/
+build/
+*.tsbuildinfo
+
+# Dependencies
+node_modules
+package-lock.json
+
+# Environment
+.env
+.env.*.local
+.env.local
+
+# Logs and temp files
 *.log
+logs/
+temp/
+tmp/
+.cache/
+
+# Runtime data
+~/.switch-ai/        # Switch AI local data directory
+*.db                 # SQLite databases
+.sqlite
+.sqlite3
+
+# Editor/IDE
+.idea/
+.vscode/
+.claude/settings.local.json
 *.swo
 *.swp
 *~
 .DS_Store
-.cache/
-.env
-.env.*.local
-.env.local
-.idea/
-.vscode/
 Thumbs.db
-logs/
-temp/
-tmp/
+
+# Testing
+coverage/
+.nyc_output/
+*.lcov
+
+# Optional - Node
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*

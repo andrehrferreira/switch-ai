@@ -424,6 +424,10 @@ See [MODEL-TIERS.md](docs/MODEL-TIERS.md) for detailed breakdown.
 - [ ] LiteLLM proxy integration
 - [ ] CLI with start/stop/status
 
+**Tarefas Atuais**:
+- `add-dashboard`: Implementar dashboard de monitoramento.
+- `switch-ai-v0.1`: Finalizar a versão inicial do projeto.
+
 ### v0.2 (Enhancement)
 - [ ] Deepseek/Gemini meta-AI support
 - [ ] Advanced complexity analysis with project context
