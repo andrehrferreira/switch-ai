@@ -1,6 +1,6 @@
 {
   "name": "switch-ai",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Intelligent model router that automatically selects the best AI model for your task, optimizing cost and performance",
   "bin": {
     "switch-ai": "dist/cli/index.cjs"
@@ -33,12 +33,12 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/yourusername/switch-ai"
+    "url": "https://github.com/andrehrferreira/switch-ai"
   },
   "bugs": {
-    "url": "https://github.com/yourusername/switch-ai/issues"
+    "url": "https://github.com/andrehrferreira/switch-ai/issues"
   },
-  "homepage": "https://github.com/yourusername/switch-ai#readme",
+  "homepage": "https://github.com/andrehrferreira/switch-ai#readme",
   "dependencies": {
     "axios": "^1.6.8",
     "better-sqlite3": "^12.6.0",
