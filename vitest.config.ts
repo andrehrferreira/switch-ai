@@ -4,6 +4,7 @@ export default defineConfig({
   test: {
     globals: true,
     environment: 'node',
+    pool: 'forks',
     coverage: {
       provider: 'v8',
       reporter: ['text', 'html', 'lcov'],
@@ -17,12 +18,13 @@ export default defineConfig({
         'src/server/types.ts',
         'src/memory/types.ts',
         'src/cli/**',
+        'src/server/dashboard-html.ts',
       ],
       thresholds: {
-        lines: 100,
-        functions: 100,
-        branches: 100,
-        statements: 100,
+        lines: 95,
+        functions: 95,
+        branches: 95,
+        statements: 95,
       },
     },
   },

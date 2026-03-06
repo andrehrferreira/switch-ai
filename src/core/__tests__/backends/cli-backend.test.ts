@@ -18,7 +18,8 @@ vi.mock('../../../core/quota-manager', () => ({
 }));
 
 import { exec, spawn } from 'child_process';
-import { detectCliTool, callClaudeCli, callGeminiCli } from '../../backends/cli-backend';
+import { quotaManager } from '../../../core/quota-manager';
+import { detectCliTool, callClaudeCli, callGeminiCli, callCursorCli } from '../../backends/cli-backend';
 
 type AnyCallback = (err: Error | null, stdout: string, stderr: string) => void;
 
@@ -72,6 +73,29 @@ function mockSpawnError(message: string) {
 
     process.nextTick(() => {
       stderrEmitter.emit('data', message);
+      child.emit('close', 1);
+    });
+
+    return child;
+  });
+}
+
+/** Mock spawn that fails with stderr containing a specific error message.
+ * The CliError class is internal to cli-backend, and spawnWithStdin creates one
+ * on non-zero exit code. The isQuotaExceeded() check looks at error.message and stderr. */
+function mockSpawnErrorWithCliError(stderr: string) {
+  vi.mocked(spawn).mockImplementation(() => {
+    const child = new EventEmitter() as ReturnType<typeof spawn>;
+    const stdoutEmitter = new EventEmitter();
+    const stderrEmitter = new EventEmitter();
+    const stdinStream = new Writable({ write(_chunk, _enc, cb) { cb(); } });
+
+    child.stdout = stdoutEmitter as ReturnType<typeof spawn>['stdout'];
+    child.stderr = stderrEmitter as ReturnType<typeof spawn>['stderr'];
+    child.stdin = stdinStream as ReturnType<typeof spawn>['stdin'];
+
+    process.nextTick(() => {
+      stderrEmitter.emit('data', stderr);
       child.emit('close', 1);
     });
 
@@ -264,5 +288,130 @@ describe('callGeminiCli', () => {
   it('propagates errors', async () => {
     mockSpawnError('gemini not found');
     await expect(callGeminiCli(messages, 100)).rejects.toThrow();
+  });
+
+  it('marks quota exhausted when error contains quota message', async () => {
+    mockSpawnErrorWithCliError('quota exceeded');
+    await expect(callGeminiCli(messages, 100)).rejects.toThrow();
+    expect(quotaManager.markExhausted).toHaveBeenCalledWith('gemini-cli');
+  });
+});
+
+describe('callCursorCli', () => {
+  const messages = [{ role: 'user', content: 'Fix this bug' }];
+
+  beforeEach(() => vi.clearAllMocks());
+
+  it('returns AnthropicResponse on success with plain text', async () => {
+    mockSpawnSuccess('  Cursor response text  ');
+    const result = await callCursorCli(messages, 100);
+    expect(result.id).toMatch(/^msg_/);
+    expect(result.type).toBe('message');
+    expect(result.role).toBe('assistant');
+    expect(result.content[0].text).toBe('Cursor response text');
+    expect(result.model).toBe('cursor-cli');
+    expect(result.stop_reason).toBe('end_turn');
+    expect(result.usage).toEqual({ input_tokens: 0, output_tokens: 0 });
+  });
+
+  it('extracts result field from JSON output', async () => {
+    const jsonOutput = JSON.stringify({ result: 'Parsed cursor output' });
+    mockSpawnSuccess(jsonOutput);
+    const result = await callCursorCli(messages, 100);
+    expect(result.content[0].text).toBe('Parsed cursor output');
+  });
+
+  it('falls back to raw stdout when JSON has no result field', async () => {
+    const jsonOutput = JSON.stringify({ type: 'result', is_error: true });
+    mockSpawnSuccess(jsonOutput);
+    const result = await callCursorCli(messages, 100);
+    expect(result.content[0].text).toBe(jsonOutput.trim());
+  });
+
+  it('spawns cursor-agent with -p and -f flags', async () => {
+    mockSpawnSuccess('output');
+    await callCursorCli(messages, 500);
+    const { command, args } = getSpawnArgs();
+    expect(command).toBe('cursor-agent');
+    expect(args).toContain('-p');
+    expect(args).toContain('-f');
+  });
+
+  it('spawns without ANTHROPIC_BASE_URL env var', async () => {
+    process.env['ANTHROPIC_BASE_URL'] = 'http://localhost:3000';
+    mockSpawnSuccess('output');
+    await callCursorCli(messages, 100);
+    const { options } = getSpawnArgs();
+    expect((options.env as NodeJS.ProcessEnv)?.['ANTHROPIC_BASE_URL']).toBeUndefined();
+    delete process.env['ANTHROPIC_BASE_URL'];
+  });
+
+  it('propagates errors', async () => {
+    mockSpawnError('cursor-agent not found');
+    await expect(callCursorCli(messages, 100)).rejects.toThrow();
+  });
+
+  it('marks quota exhausted when error contains rate limit message', async () => {
+    mockSpawnErrorWithCliError('rate limit exceeded');
+    await expect(callCursorCli(messages, 100)).rejects.toThrow();
+    expect(quotaManager.markExhausted).toHaveBeenCalledWith('cursor-cli');
+  });
+});
+
+describe('quota exhaustion', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('detectCliTool returns false when quota is exhausted', async () => {
+    vi.mocked(quotaManager.isExhausted).mockReturnValue(true);
+    const result = await detectCliTool('claude');
+    expect(result).toBe(false);
+    expect(exec).not.toHaveBeenCalled();
+  });
+
+  it('callClaudeCli marks exhausted on quota error', async () => {
+    mockSpawnErrorWithCliError('quota exceeded for claude');
+    await expect(callClaudeCli([{ role: 'user', content: 'test' }], 100)).rejects.toThrow();
+    expect(quotaManager.markExhausted).toHaveBeenCalledWith('claude-cli');
+  });
+});
+
+describe('spawn error event', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('handles spawn error event (e.g. ENOENT)', async () => {
+    vi.mocked(spawn).mockImplementation(() => {
+      const child = new EventEmitter() as ReturnType<typeof spawn>;
+      const stdoutEmitter = new EventEmitter();
+      const stderrEmitter = new EventEmitter();
+      const stdinStream = new Writable({ write(_chunk, _enc, cb) { cb(); } });
+
+      child.stdout = stdoutEmitter as ReturnType<typeof spawn>['stdout'];
+      child.stderr = stderrEmitter as ReturnType<typeof spawn>['stderr'];
+      child.stdin = stdinStream as ReturnType<typeof spawn>['stdin'];
+
+      process.nextTick(() => {
+        child.emit('error', new Error('spawn ENOENT'));
+      });
+
+      return child;
+    });
+
+    await expect(callClaudeCli([{ role: 'user', content: 'test' }], 100)).rejects.toThrow('spawn ENOENT');
+  });
+});
+
+describe('extractText with ContentBlock arrays', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('handles ContentBlock array in messages', async () => {
+    mockSpawnSuccess('response');
+    const messages = [
+      { role: 'user', content: [
+        { type: 'text' as const, text: 'First part ' },
+        { type: 'text' as const, text: 'second part' },
+      ]},
+    ];
+    const result = await callClaudeCli(messages, 100);
+    expect(result.content[0].text).toBe('response');
   });
 });

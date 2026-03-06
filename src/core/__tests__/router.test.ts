@@ -5,11 +5,15 @@ import type { AnthropicResponse } from '../../server/types';
 vi.mock('../selection-algorithm');
 vi.mock('../backends/openrouter-backend');
 vi.mock('../backends/cli-backend');
+vi.mock('../backends/gemini-api-backend');
+vi.mock('../backend-preference');
 
 import { selectModel } from '../selection-algorithm';
 import { callOpenRouterBackend } from '../backends/openrouter-backend';
 import { detectCliTool, callClaudeCli, callGeminiCli, callCursorCli } from '../backends/cli-backend';
-import { routeRequest } from '../router';
+import { hasGeminiCredentials, callGeminiApiBackend } from '../backends/gemini-api-backend';
+import { getForcedBackend } from '../backend-preference';
+import { routeRequest, extractText } from '../router';
 
 function makeModel(overrides: Partial<Model> = {}): Model {
   return {
@@ -47,6 +51,9 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(detectCliTool).mockResolvedValue(false);
   vi.mocked(callOpenRouterBackend).mockResolvedValue(makeResponse());
+  vi.mocked(getForcedBackend).mockReturnValue('auto');
+  vi.mocked(hasGeminiCredentials).mockReturnValue(false);
+  vi.mocked(callGeminiApiBackend).mockResolvedValue(makeResponse('Gemini API'));
   vi.mocked(selectModel).mockReturnValue({
     model: makeModel(),
     fallbackChain: [],
@@ -237,5 +244,232 @@ describe('routeRequest', () => {
       'Hello\nHi there\nHow are you?',
       expect.any(Object)
     );
+  });
+
+  it('skips CLIs when messages contain tool_result', async () => {
+    vi.mocked(detectCliTool).mockResolvedValue(true);
+    vi.mocked(callClaudeCli).mockResolvedValue(makeResponse('CLI'));
+    vi.mocked(hasGeminiCredentials).mockReturnValue(false);
+
+    const result = await routeRequest({
+      messages: [
+        { role: 'user', content: 'Use tool' },
+        { role: 'assistant', content: [{ type: 'tool_use', id: 'tu_1', name: 'test', input: {} }] },
+        { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'tu_1', content: 'result' }] },
+      ],
+      maxTokens: 100,
+    });
+    // CLI should be skipped, fallback to openrouter
+    expect(callClaudeCli).not.toHaveBeenCalled();
+    expect(result.backend).toBe('openrouter');
+  });
+
+  it('skips CLIs when last assistant used tool_use', async () => {
+    vi.mocked(detectCliTool).mockResolvedValue(true);
+    vi.mocked(callClaudeCli).mockResolvedValue(makeResponse('CLI'));
+    vi.mocked(hasGeminiCredentials).mockReturnValue(false);
+
+    const result = await routeRequest({
+      messages: [
+        { role: 'user', content: 'Read file' },
+        { role: 'assistant', content: [{ type: 'tool_use', id: 'tu_1', name: 'read', input: {} }] },
+      ],
+      maxTokens: 100,
+    });
+    expect(callClaudeCli).not.toHaveBeenCalled();
+    expect(result.backend).toBe('openrouter');
+  });
+
+  it('routes to gemini-api when credentials are available (auto mode)', async () => {
+    vi.mocked(detectCliTool).mockResolvedValue(false);
+    vi.mocked(hasGeminiCredentials).mockReturnValue(true);
+
+    const result = await routeRequest(baseReq);
+    expect(result.backend).toBe('gemini-api');
+    expect(callOpenRouterBackend).not.toHaveBeenCalled();
+  });
+
+  it('falls through to openrouter when gemini-api fails', async () => {
+    vi.mocked(detectCliTool).mockResolvedValue(false);
+    vi.mocked(hasGeminiCredentials).mockReturnValue(true);
+    vi.mocked(callGeminiApiBackend).mockRejectedValue(new Error('API error'));
+
+    const result = await routeRequest(baseReq);
+    expect(result.backend).toBe('openrouter');
+  });
+
+  it('routes to cursor-cli when available and claude/gemini fail', async () => {
+    vi.mocked(detectCliTool).mockResolvedValue(true);
+    vi.mocked(callClaudeCli).mockRejectedValue(new Error('fail'));
+    vi.mocked(callGeminiCli).mockRejectedValue(new Error('fail'));
+    vi.mocked(callCursorCli).mockResolvedValue(makeResponse('Cursor'));
+
+    const result = await routeRequest(baseReq);
+    expect(result.backend).toBe('cursor-cli');
+    expect(result.selectedModel).toBe('cursor-cli');
+  });
+});
+
+describe('forced backend mode', () => {
+  it('forces claude-cli backend', async () => {
+    vi.mocked(getForcedBackend).mockReturnValue('claude-cli');
+    vi.mocked(callClaudeCli).mockResolvedValue(makeResponse('Forced Claude'));
+
+    const result = await routeRequest(baseReq);
+    expect(result.backend).toBe('claude-cli');
+    expect(result.selectedModel).toBe('claude-cli');
+  });
+
+  it('forces gemini-cli backend', async () => {
+    vi.mocked(getForcedBackend).mockReturnValue('gemini-cli');
+    vi.mocked(callGeminiCli).mockResolvedValue(makeResponse('Forced Gemini'));
+
+    const result = await routeRequest(baseReq);
+    expect(result.backend).toBe('gemini-cli');
+    expect(result.selectedModel).toBe('gemini-cli');
+  });
+
+  it('forces cursor-cli backend', async () => {
+    vi.mocked(getForcedBackend).mockReturnValue('cursor-cli');
+    vi.mocked(callCursorCli).mockResolvedValue(makeResponse('Forced Cursor'));
+
+    const result = await routeRequest(baseReq);
+    expect(result.backend).toBe('cursor-cli');
+    expect(result.selectedModel).toBe('cursor-cli');
+  });
+
+  it('forces gemini-api backend', async () => {
+    vi.mocked(getForcedBackend).mockReturnValue('gemini-api');
+    vi.mocked(callGeminiApiBackend).mockResolvedValue(makeResponse('Forced Gemini API'));
+
+    const result = await routeRequest(baseReq);
+    expect(result.backend).toBe('gemini-api');
+    expect(result.selectedModel).toBe('gemini-api');
+  });
+
+  it('forces openrouter backend', async () => {
+    vi.mocked(getForcedBackend).mockReturnValue('openrouter');
+    vi.mocked(callOpenRouterBackend).mockResolvedValue(makeResponse('Forced OR'));
+
+    const result = await routeRequest(baseReq);
+    expect(result.backend).toBe('openrouter');
+  });
+
+  it('falls through to auto mode when forced backend fails', async () => {
+    vi.mocked(getForcedBackend).mockReturnValue('claude-cli');
+    vi.mocked(callClaudeCli).mockRejectedValue(new Error('Forced failed'));
+    vi.mocked(detectCliTool).mockResolvedValue(false);
+    vi.mocked(callOpenRouterBackend).mockResolvedValue(makeResponse('Auto fallback'));
+
+    const result = await routeRequest(baseReq);
+    expect(result.backend).toBe('openrouter');
+  });
+
+  it('falls through to auto when forced fails with stderr', async () => {
+    vi.mocked(getForcedBackend).mockReturnValue('gemini-cli');
+    const err = new Error('fail') as Error & { stderr: string };
+    err.stderr = 'some stderr output';
+    vi.mocked(callGeminiCli).mockRejectedValue(err);
+    vi.mocked(detectCliTool).mockResolvedValue(false);
+    vi.mocked(callOpenRouterBackend).mockResolvedValue(makeResponse('Fallback'));
+
+    const result = await routeRequest(baseReq);
+    expect(result.backend).toBe('openrouter');
+  });
+
+  it('passes system/tools/toolChoice to forced gemini-api', async () => {
+    vi.mocked(getForcedBackend).mockReturnValue('gemini-api');
+    vi.mocked(callGeminiApiBackend).mockResolvedValue(makeResponse('Gemini'));
+
+    await routeRequest({
+      ...baseReq,
+      system: 'You are a helper',
+      tools: [{ name: 'read', description: 'Read file', input_schema: {} }],
+      toolChoice: { type: 'auto' },
+    });
+
+    expect(callGeminiApiBackend).toHaveBeenCalledWith(expect.objectContaining({
+      system: 'You are a helper',
+      tools: expect.any(Array),
+      toolChoice: { type: 'auto' },
+    }));
+  });
+
+  it('passes system/tools/toolChoice to forced openrouter', async () => {
+    vi.mocked(getForcedBackend).mockReturnValue('openrouter');
+    vi.mocked(callOpenRouterBackend).mockResolvedValue(makeResponse('OR'));
+
+    await routeRequest({
+      ...baseReq,
+      system: 'Be helpful',
+      tools: [{ name: 'write' }],
+      toolChoice: { type: 'any' },
+    });
+
+    expect(callOpenRouterBackend).toHaveBeenCalledWith(expect.objectContaining({
+      system: 'Be helpful',
+      tools: expect.any(Array),
+      toolChoice: { type: 'any' },
+    }));
+  });
+});
+
+describe('non-Error throws (branch coverage)', () => {
+  it('handles non-Error throw in CLI failure path', async () => {
+    vi.mocked(detectCliTool).mockResolvedValue(true);
+    vi.mocked(callClaudeCli).mockRejectedValue('string error');
+    vi.mocked(callGeminiCli).mockRejectedValue(42);
+    vi.mocked(callCursorCli).mockRejectedValue({ custom: 'object' });
+    vi.mocked(callOpenRouterBackend).mockResolvedValue(makeResponse('fallback'));
+
+    const result = await routeRequest(baseReq);
+    expect(result.backend).toBe('openrouter');
+  });
+
+  it('handles non-Error throw in gemini-api path', async () => {
+    vi.mocked(detectCliTool).mockResolvedValue(false);
+    vi.mocked(hasGeminiCredentials).mockReturnValue(true);
+    vi.mocked(callGeminiApiBackend).mockRejectedValue('api string error');
+    vi.mocked(callOpenRouterBackend).mockResolvedValue(makeResponse('fallback'));
+
+    const result = await routeRequest(baseReq);
+    expect(result.backend).toBe('openrouter');
+  });
+
+  it('handles non-Error throw in openrouter path', async () => {
+    vi.mocked(detectCliTool).mockResolvedValue(false);
+    vi.mocked(callOpenRouterBackend).mockRejectedValue('openrouter string error');
+
+    await expect(routeRequest(baseReq)).rejects.toThrow('All routing backends exhausted');
+  });
+
+  it('handles non-Error throw in forced backend path', async () => {
+    vi.mocked(getForcedBackend).mockReturnValue('claude-cli');
+    vi.mocked(callClaudeCli).mockRejectedValue('forced string error');
+    vi.mocked(detectCliTool).mockResolvedValue(false);
+    vi.mocked(callOpenRouterBackend).mockResolvedValue(makeResponse('auto'));
+
+    const result = await routeRequest(baseReq);
+    expect(result.backend).toBe('openrouter');
+  });
+});
+
+describe('extractText', () => {
+  it('returns string content as-is', () => {
+    expect(extractText('hello world')).toBe('hello world');
+  });
+
+  it('extracts text from ContentBlock array', () => {
+    const blocks = [
+      { type: 'text' as const, text: 'Hello ' },
+      { type: 'tool_use' as const, id: 'tu_1', name: 'test', input: {} },
+      { type: 'text' as const, text: 'World' },
+    ];
+    expect(extractText(blocks)).toBe('Hello World');
+  });
+
+  it('returns empty string for array with no text blocks', () => {
+    const blocks = [{ type: 'tool_use' as const, id: 'tu_1', name: 'test', input: {} }];
+    expect(extractText(blocks)).toBe('');
   });
 });

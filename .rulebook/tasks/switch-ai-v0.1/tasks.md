@@ -36,7 +36,7 @@
 
 # Phase 6: Testing
 
-- [x] 6.1 Unit tests (315 tests, 11 failures due to recent code changes - needs fixes)
+- [x] 6.1 Unit tests (core, config, memory, server, CLI — comprehensive coverage)
 - [ ] 6.2 Integration tests (full flow)
 - [ ] 6.3 E2E tests (real OpenRouter API)
 
@@ -44,11 +44,11 @@
 
 - [ ] 7.1 JSDoc comments for all exports
 - [ ] 7.2 Type definitions and inline docs
-- [ ] 7.3 Architecture documentation
+- [x] 7.3 Architecture documentation
 
 # Phase 8: Release
 
-- [ ] 8.1 Version bump to 0.1.0
-- [ ] 8.2 CHANGELOG update
+- [x] 8.1 Version bump to 0.1.0
+- [x] 8.2 CHANGELOG update
 - [ ] 8.3 npm publish
 - [ ] 8.4 GitHub release created

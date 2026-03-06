@@ -189,4 +189,82 @@ describe('orchestrate', () => {
       expect.objectContaining({ prompt: 'x'.repeat(500) })
     );
   });
+
+  it('handles getBlacklistedModels throwing (DB unavailable)', async () => {
+    vi.mocked(getBlacklistedModels).mockImplementation(() => { throw new Error('DB unavailable'); });
+    const result = await orchestrate(baseReq);
+    expect(result.selectedModel).toBe('test/model');
+  });
+
+  it('handles recordRequest throwing Error on success path', async () => {
+    vi.mocked(recordRequest).mockImplementation(() => { throw new Error('DB write failed'); });
+    const result = await orchestrate(baseReq);
+    expect(result.selectedModel).toBe('test/model');
+  });
+
+  it('handles recordRequest throwing non-Error on success path', async () => {
+    vi.mocked(recordRequest).mockImplementation(() => { throw 'string error'; });
+    const result = await orchestrate(baseReq);
+    expect(result.selectedModel).toBe('test/model');
+  });
+
+  it('handles recordRequest throwing Error on failure path', async () => {
+    vi.mocked(validateResponse).mockReturnValue({ passed: false, score: 0.0, issues: ['empty'] });
+    vi.mocked(routeRequest)
+      .mockResolvedValueOnce(makeRouterResult('first/model'))
+      .mockResolvedValueOnce(makeRouterResult('second/model'));
+    vi.mocked(recordRequest).mockImplementation(() => { throw new Error('DB write failed'); });
+
+    const result = await orchestrate(baseReq);
+    expect(result.selectedModel).toBe('second/model');
+  });
+
+  it('handles recordRequest throwing non-Error on failure path', async () => {
+    vi.mocked(validateResponse).mockReturnValue({ passed: false, score: 0.0, issues: ['empty'] });
+    vi.mocked(routeRequest)
+      .mockResolvedValueOnce(makeRouterResult('first/model'))
+      .mockResolvedValueOnce(makeRouterResult('second/model'));
+    vi.mocked(recordRequest).mockImplementation(() => { throw 42; });
+
+    const result = await orchestrate(baseReq);
+    expect(result.selectedModel).toBe('second/model');
+  });
+
+  it('handles recordFailure throwing (DB unavailable)', async () => {
+    vi.mocked(validateResponse).mockReturnValue({ passed: false, score: 0.0, issues: ['empty'] });
+    vi.mocked(recordFailure).mockImplementation(() => { throw new Error('DB error'); });
+    vi.mocked(routeRequest)
+      .mockResolvedValueOnce(makeRouterResult('bad/model'))
+      .mockResolvedValueOnce(makeRouterResult('retry/model'));
+
+    const result = await orchestrate(baseReq);
+    expect(result).toBeDefined();
+  });
+
+  it('skips validation for CLI backends (claude-cli)', async () => {
+    vi.mocked(routeRequest).mockResolvedValue({
+      ...makeRouterResult('claude-cli'),
+      backend: 'claude-cli',
+    });
+    await orchestrate(baseReq);
+    expect(validateResponse).not.toHaveBeenCalled();
+  });
+
+  it('skips validation for CLI backends (gemini-cli)', async () => {
+    vi.mocked(routeRequest).mockResolvedValue({
+      ...makeRouterResult('gemini-cli'),
+      backend: 'gemini-cli',
+    });
+    await orchestrate(baseReq);
+    expect(validateResponse).not.toHaveBeenCalled();
+  });
+
+  it('skips validation for CLI backends (cursor-cli)', async () => {
+    vi.mocked(routeRequest).mockResolvedValue({
+      ...makeRouterResult('cursor-cli'),
+      backend: 'cursor-cli',
+    });
+    await orchestrate(baseReq);
+    expect(validateResponse).not.toHaveBeenCalled();
+  });
 });

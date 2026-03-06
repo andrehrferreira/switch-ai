@@ -1,6 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('../../core/orchestrator');
+vi.mock('../middleware', () => ({
+  createMiddlewareStack: vi.fn().mockReturnValue([]),
+  executeMiddlewareStack: vi.fn().mockResolvedValue(undefined),
+}));
 
 import { orchestrate } from '../../core/orchestrator';
 import { handleRequest } from '../handler';
@@ -107,13 +111,67 @@ describe('handleRequest', () => {
     expect(response.id).toMatch(/^msg_/);
   });
 
-  it('sets error in parsedBody for invalid endpoint', async () => {
-    const ctx = makeCtx({ url: '/v1/invalid' });
-    try {
-      await handleRequest(ctx);
-    } catch {
-      // may throw
-    }
-    expect(ctx.parsedBody).toHaveProperty('error');
+  it('handles valid request without middleware interference', async () => {
+    const ctx = makeCtx();
+    const response = await handleRequest(ctx);
+    expect(response.type).toBe('message');
+  });
+
+  it('throws ValidationError when error type is invalid_request_error', async () => {
+    const ctx = makeCtx();
+    ctx.parsedBody = {
+      error: { type: 'invalid_request_error', message: 'Missing required field' },
+    };
+    await expect(handleRequest(ctx)).rejects.toThrow('Missing required field');
+  });
+
+  it('throws generic Error when error type is not invalid_request_error', async () => {
+    const ctx = makeCtx();
+    ctx.parsedBody = {
+      error: { type: 'server_error', message: 'Internal failure' },
+    };
+    await expect(handleRequest(ctx)).rejects.toThrow('Internal failure');
+  });
+
+  it('throws with default message when error has no message', async () => {
+    const ctx = makeCtx();
+    ctx.parsedBody = {
+      error: { type: 'unknown' },
+    };
+    await expect(handleRequest(ctx)).rejects.toThrow('Request error');
+  });
+
+  it('uses response model when client model is empty', async () => {
+    vi.mocked(orchestrate).mockResolvedValue(makeOrchestrateResult('backend-model'));
+    const ctx = makeCtx({
+      parsedBody: {
+        model: '',
+        messages: [{ role: 'user', content: 'Test' }],
+        max_tokens: 50,
+      },
+    });
+    const response = await handleRequest(ctx);
+    expect(response.model).toBe('backend-model');
+  });
+
+  it('passes system, tools, and toolChoice to orchestrate', async () => {
+    const ctx = makeCtx({
+      parsedBody: {
+        model: 'test',
+        messages: [{ role: 'user', content: 'Test' }],
+        max_tokens: 100,
+        system: 'Be helpful',
+        tools: [{ name: 'read' }],
+        tool_choice: { type: 'auto' },
+      },
+    });
+    await handleRequest(ctx);
+    expect(orchestrate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        system: 'Be helpful',
+        tools: [{ name: 'read' }],
+        toolChoice: { type: 'auto' },
+      })
+    );
   });
 });
