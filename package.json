@@ -1,6 +1,6 @@
 {
   "name": "switch-ai",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Intelligent model router that automatically selects the best AI model for your task, optimizing cost and performance",
   "bin": {
     "switch-ai": "dist/cli/index.cjs"
