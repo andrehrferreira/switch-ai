@@ -7,9 +7,9 @@ const server = fastify({ logger: true });
 
 const DEFAULT_DB_PATH = path.join(os.homedir(), '.switch-ai', 'memory.db');
 
-function ensureConnected(): void {
+async function ensureConnected(): Promise<void> {
   if (!databaseManager.isConnected()) {
-    databaseManager.connect(DEFAULT_DB_PATH);
+    await databaseManager.connect(DEFAULT_DB_PATH);
   }
 }
 
@@ -19,14 +19,14 @@ server.get('/', async (_request, reply) => {
 
 // Endpoint for all calls with filtering and pagination
 server.get('/api/calls', async (_request, _reply) => {
-  ensureConnected();
+  await ensureConnected();
   // TODO: implement getAllRequests in memory module
   return [];
 });
 
 // Endpoint for aggregated statistics
 server.get('/api/stats', async (_request, _reply) => {
-  ensureConnected();
+  await ensureConnected();
   const summary = getCostSummary();
   const db = databaseManager.getDb();
   const successCount = (db.prepare('SELECT COUNT(*) as count FROM requests WHERE status = ?').get('success') as { count: number }).count;
@@ -37,7 +37,7 @@ server.get('/api/stats', async (_request, _reply) => {
 
 // Endpoint for chart data
 server.get('/api/chart-data', async (_request, _reply) => {
-  ensureConnected();
+  await ensureConnected();
   // Cost over time
   const db = databaseManager.getDb();
   const costData = db.prepare(`

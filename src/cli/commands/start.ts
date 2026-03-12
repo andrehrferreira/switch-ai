@@ -33,7 +33,7 @@ export async function cmdStart(options: { port?: number; host?: string } = {}): 
 
   // Connect DB
   const dbPath = path.join(config.memory.path, 'memory.db');
-  databaseManager.connect(dbPath);
+  await databaseManager.connect(dbPath);
 
   // Auto-sync models from OpenRouter if no valid cache
   if (!readDiskCache()) {

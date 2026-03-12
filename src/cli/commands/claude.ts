@@ -31,7 +31,7 @@ export async function cmdClaude(claudeArgs: string[]): Promise<void> {
     process.env['SWITCH_AI_PROXY_MODE'] = 'claude-code';
 
     const dbPath = path.join(os.homedir(), '.switch-ai', 'memory.db');
-    databaseManager.connect(dbPath);
+    await databaseManager.connect(dbPath);
 
     const spinner = ora('Starting Switch AI proxy...').start();
     try {

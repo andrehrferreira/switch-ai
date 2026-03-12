@@ -1,11 +1,59 @@
 import { describe, it, expect } from 'vitest';
-import Database from 'better-sqlite3';
+import initSqlJs from 'sql.js';
+import type { CompatDatabase } from '../db';
 import { initializeDatabase } from '../migrations';
 import { DatabaseError } from '../../utils/errors';
 
+async function createInMemoryDb(): Promise<{ db: CompatDatabase; close: () => void }> {
+  const SQL = await initSqlJs();
+  const sqlDb = new SQL.Database();
+
+  const db: CompatDatabase = {
+    exec(sql: string) {
+      sqlDb.run(sql);
+    },
+    pragma(directive: string) {
+      sqlDb.run(`PRAGMA ${directive}`);
+    },
+    prepare(sql: string) {
+      return {
+        run(...params: unknown[]) {
+          sqlDb.run(sql, params as never[]);
+        },
+        get(...params: unknown[]): unknown {
+          const stmt = sqlDb.prepare(sql);
+          stmt.bind(params as never[]);
+          if (stmt.step()) {
+            const result = stmt.getAsObject();
+            stmt.free();
+            return result;
+          }
+          stmt.free();
+          return undefined;
+        },
+        all(...params: unknown[]): unknown[] {
+          const stmt = sqlDb.prepare(sql);
+          stmt.bind(params as never[]);
+          const results: unknown[] = [];
+          while (stmt.step()) {
+            results.push(stmt.getAsObject());
+          }
+          stmt.free();
+          return results;
+        },
+      };
+    },
+    close() {
+      sqlDb.close();
+    },
+  };
+
+  return { db, close: () => sqlDb.close() };
+}
+
 describe('initializeDatabase', () => {
-  it('creates all tables in an in-memory database', () => {
-    const db = new Database(':memory:');
+  it('creates all tables in an in-memory database', async () => {
+    const { db } = await createInMemoryDb();
     initializeDatabase(db);
 
     const tables = db
@@ -23,8 +71,8 @@ describe('initializeDatabase', () => {
     db.close();
   });
 
-  it('creates all indexes', () => {
-    const db = new Database(':memory:');
+  it('creates all indexes', async () => {
+    const { db } = await createInMemoryDb();
     initializeDatabase(db);
 
     const indexes = db
@@ -35,8 +83,8 @@ describe('initializeDatabase', () => {
     db.close();
   });
 
-  it('is idempotent (can be called multiple times)', () => {
-    const db = new Database(':memory:');
+  it('is idempotent (can be called multiple times)', async () => {
+    const { db } = await createInMemoryDb();
     initializeDatabase(db);
     initializeDatabase(db); // Should not throw
 
@@ -48,8 +96,8 @@ describe('initializeDatabase', () => {
     db.close();
   });
 
-  it('throws DatabaseError when initialization fails', () => {
-    const db = new Database(':memory:');
+  it('throws DatabaseError when initialization fails', async () => {
+    const { db } = await createInMemoryDb();
     db.close(); // Close the db to simulate failure
 
     expect(() => initializeDatabase(db)).toThrow(DatabaseError);

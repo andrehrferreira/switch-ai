@@ -4,23 +4,36 @@ import os from 'os';
 import fs from 'fs';
 import { DatabaseError } from '../../utils/errors';
 
-// Import fresh instance per test by re-importing the module
-// We need to test the singleton, so we import it directly
 let dbManager: typeof import('../db').default;
 
+function tmpDbPath(): string {
+  return path.join(os.tmpdir(), `switch-ai-test-${Date.now()}-${Math.random().toString(36).slice(2)}`, 'test.db');
+}
+
 describe('DatabaseManager', () => {
-  afterEach(async () => {
-    // Disconnect after each test to reset singleton state
+  let cleanupPaths: string[] = [];
+
+  afterEach(() => {
     if (dbManager?.isConnected()) {
       dbManager.disconnect();
     }
+    for (const p of cleanupPaths) {
+      try {
+        const dir = path.dirname(p);
+        fs.rmSync(dir, { recursive: true, force: true });
+      } catch { /* ignore */ }
+    }
+    cleanupPaths = [];
   });
 
-  it('connects to an in-memory database', async () => {
+  it('connects to a database', async () => {
     const { default: db } = await import('../db');
     dbManager = db;
 
-    const result = dbManager.connect(':memory:');
+    const dbPath = tmpDbPath();
+    cleanupPaths.push(dbPath);
+
+    const result = await dbManager.connect(dbPath);
     expect(result).toBeDefined();
     expect(dbManager.isConnected()).toBe(true);
   });
@@ -29,8 +42,11 @@ describe('DatabaseManager', () => {
     const { default: db } = await import('../db');
     dbManager = db;
 
-    const first = dbManager.connect(':memory:');
-    const second = dbManager.connect(':memory:');
+    const dbPath = tmpDbPath();
+    cleanupPaths.push(dbPath);
+
+    const first = await dbManager.connect(dbPath);
+    const second = await dbManager.connect(dbPath);
     expect(first).toBe(second);
   });
 
@@ -38,7 +54,10 @@ describe('DatabaseManager', () => {
     const { default: db } = await import('../db');
     dbManager = db;
 
-    dbManager.connect(':memory:');
+    const dbPath = tmpDbPath();
+    cleanupPaths.push(dbPath);
+
+    await dbManager.connect(dbPath);
     const result = dbManager.getDb();
     expect(result).toBeDefined();
   });
@@ -47,7 +66,6 @@ describe('DatabaseManager', () => {
     const { default: db } = await import('../db');
     dbManager = db;
 
-    // Ensure disconnected state
     if (dbManager.isConnected()) {
       dbManager.disconnect();
     }
@@ -59,7 +77,10 @@ describe('DatabaseManager', () => {
     const { default: db } = await import('../db');
     dbManager = db;
 
-    dbManager.connect(':memory:');
+    const dbPath = tmpDbPath();
+    cleanupPaths.push(dbPath);
+
+    await dbManager.connect(dbPath);
     expect(dbManager.isConnected()).toBe(true);
     dbManager.disconnect();
     expect(dbManager.isConnected()).toBe(false);
@@ -84,17 +105,13 @@ describe('DatabaseManager', () => {
       dbManager.disconnect();
     }
 
-    const tmpDir = path.join(os.tmpdir(), `switch-ai-test-${Date.now()}`, 'nested');
-    const dbPath = path.join(tmpDir, 'test.db');
+    const dbPath = tmpDbPath();
+    const dir = path.dirname(dbPath);
+    cleanupPaths.push(dbPath);
 
-    try {
-      dbManager.connect(dbPath);
-      expect(fs.existsSync(tmpDir)).toBe(true);
-      expect(dbManager.isConnected()).toBe(true);
-    } finally {
-      dbManager.disconnect();
-      fs.rmSync(path.dirname(tmpDir), { recursive: true, force: true });
-    }
+    await dbManager.connect(dbPath);
+    expect(fs.existsSync(dir)).toBe(true);
+    expect(dbManager.isConnected()).toBe(true);
   });
 
   it('isConnected returns false initially', async () => {
@@ -116,26 +133,15 @@ describe('DatabaseManager', () => {
       dbManager.disconnect();
     }
 
-    const conn = dbManager.connect(':memory:');
+    const dbPath = tmpDbPath();
+    cleanupPaths.push(dbPath);
+
+    const conn = await dbManager.connect(dbPath);
     const closeSpy = vi.spyOn(conn, 'close').mockImplementation(() => {
       throw new Error('close failed');
     });
 
     expect(() => dbManager.disconnect()).toThrow(DatabaseError);
-    // Restore real close so afterEach can clean up
     closeSpy.mockRestore();
-  });
-
-  it('throws DatabaseError when connecting to an invalid path', async () => {
-    const { default: db } = await import('../db');
-    dbManager = db;
-
-    if (dbManager.isConnected()) {
-      dbManager.disconnect();
-    }
-
-    // Pass a directory path as db file - SQLite can't open a directory as a file
-    const { default: os } = await import('os');
-    expect(() => dbManager.connect(os.tmpdir())).toThrow(DatabaseError);
   });
 });

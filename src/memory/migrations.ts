@@ -1,15 +1,13 @@
-import Database from 'better-sqlite3';
+import type { CompatDatabase } from './db';
 import { SCHEMA, INDEXES } from './schema';
 import { DatabaseError } from '../utils/errors';
 
-export function initializeDatabase(db: Database.Database): void {
+export function initializeDatabase(db: CompatDatabase): void {
   try {
-    // Create all tables
     for (const tableSql of Object.values(SCHEMA)) {
       db.exec(tableSql);
     }
 
-    // Create all indexes
     for (const indexSql of INDEXES) {
       db.exec(indexSql);
     }

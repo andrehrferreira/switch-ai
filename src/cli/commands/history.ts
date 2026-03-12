@@ -4,13 +4,13 @@ import { databaseManager } from '../../memory';
 import { getCostSummary, getModelPerformance, getTopModels } from '../../memory/analytics';
 import configManager from '../../config';
 
-function connectDb(): boolean {
+async function connectDb(): Promise<boolean> {
   if (databaseManager.isConnected()) return true;
 
   try {
     const config = configManager.load();
     const dbPath = path.join(config.memory.path, 'memory.db');
-    databaseManager.connect(dbPath);
+    await databaseManager.connect(dbPath);
     return true;
   } catch {
     console.error(chalk.red('Could not connect to database'));
@@ -18,8 +18,8 @@ function connectDb(): boolean {
   }
 }
 
-export function cmdHistory(limit = 20): void {
-  if (!connectDb()) return;
+export async function cmdHistory(limit = 20): Promise<void> {
+  if (!(await connectDb())) return;
 
   const db = databaseManager.getDb();
   const rows = db
@@ -53,8 +53,8 @@ export function cmdHistory(limit = 20): void {
   }
 }
 
-export function cmdStats(): void {
-  if (!connectDb()) return;
+export async function cmdStats(): Promise<void> {
+  if (!(await connectDb())) return;
 
   const summary = getCostSummary();
   const byCategory = ['code', 'research', 'documentation', 'tests', 'architecture'];
